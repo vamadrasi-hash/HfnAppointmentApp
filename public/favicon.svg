@@ -1,0 +1,18 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0f766e"/>
+      <stop offset="1" stop-color="#0b4f48"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="512" height="512" rx="120" fill="url(#tile)"/>
+  <ellipse cx="256" cy="300" rx="150" ry="150" fill="#ffffff" fill-opacity="0.10"/>
+  <g>
+      <ellipse cx="256" cy="251.0" rx="34.6" ry="87.0" fill="#ffffff" fill-opacity="0.55" transform="rotate(-54 256 338)"/>
+      <ellipse cx="256" cy="235.6" rx="38.4" ry="102.4" fill="#ffffff" fill-opacity="0.69" transform="rotate(-28 256 338)"/>
+      <ellipse cx="256" cy="220.2" rx="42.2" ry="117.8" fill="#ffffff" fill-opacity="0.92" transform="rotate(0 256 338)"/>
+      <ellipse cx="256" cy="235.6" rx="38.4" ry="102.4" fill="#ffffff" fill-opacity="0.69" transform="rotate(28 256 338)"/>
+      <ellipse cx="256" cy="251.0" rx="34.6" ry="87.0" fill="#ffffff" fill-opacity="0.55" transform="rotate(54 256 338)"/>
+  </g>
+  <circle cx="256" cy="338" r="23" fill="#ffffff" fill-opacity="0.92"/>
+</svg>
