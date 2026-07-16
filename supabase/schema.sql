@@ -17,8 +17,22 @@ drop type if exists booking_status cascade;
 create extension if not exists "uuid-ossp";
 
 -- ---- Enums ----------------------------------------------------------
-create type user_role as enum ('abhyasi', 'preceptor', 'admin');
-create type booking_status as enum ('confirmed', 'cancelled', 'completed');
+create type user_role as enum ('abhyasi', 'preceptor', 'coordinator', 'admin');
+-- The full sitting lifecycle (see the state machine in the spec):
+--   requested -> confirmed | declined | alternate_proposed | expired
+--   alternate_proposed -> confirmed (abhyasi accepts) | cancelled
+--   confirmed -> reminded -> completed | no_show ; confirmed/reminded -> cancelled
+create type booking_status as enum (
+  'requested',
+  'confirmed',
+  'alternate_proposed',
+  'declined',
+  'cancelled',
+  'reminded',
+  'completed',
+  'no_show',
+  'expired'
+);
 
 -- =====================================================================
 -- MASTER DATA: Zone -> Center -> Area
@@ -72,6 +86,8 @@ create table profiles (
   -- geolocation (used by the "near me" feature)
   home_latitude   double precision,
   home_longitude  double precision,
+  -- Preceptor option: confirm incoming requests automatically (low-friction booking).
+  auto_confirm    boolean not null default false,
   created_at      timestamptz default now(),
   updated_at      timestamptz default now()
 );
@@ -105,22 +121,37 @@ create index idx_slots_center on availability_slots(center_id);
 -- BOOKINGS — an abhyasi reserves a place in a slot for one real date
 -- =====================================================================
 create table bookings (
-  id            uuid primary key default uuid_generate_v4(),
-  slot_id       uuid not null references availability_slots(id) on delete cascade,
-  abhyasi_id    uuid not null references profiles(id) on delete cascade,
-  booking_date  date not null,
-  status        booking_status not null default 'confirmed',
-  note          text,
-  created_at    timestamptz default now()
+  id                 uuid primary key default uuid_generate_v4(),
+  slot_id            uuid not null references availability_slots(id) on delete cascade,
+  abhyasi_id         uuid not null references profiles(id) on delete cascade,
+  preceptor_id       uuid references profiles(id) on delete cascade,  -- filled from the slot
+  booking_date       date not null,
+  status             booking_status not null default 'requested',
+  note               text,
+  -- confirmation workflow bookkeeping
+  requested_at       timestamptz default now(),
+  confirmed_at       timestamptz,
+  decided_at         timestamptz,                 -- when the last status change happened
+  decided_by         uuid references profiles(id) on delete set null,
+  cancel_reason      text,
+  decline_reason     text,
+  -- a preceptor-proposed alternate time (abhyasi accepts -> becomes the sitting)
+  alternate_date       date,
+  alternate_start_time time,
+  alternate_end_time   time,
+  channel_used       text,                        -- 'whatsapp' | 'email' (Phase 3/4)
+  created_at         timestamptz default now()
 );
 
 create index idx_bookings_slot_date on bookings(slot_id, booking_date);
 create index idx_bookings_abhyasi on bookings(abhyasi_id);
+create index idx_bookings_preceptor on bookings(preceptor_id);
 
--- One person cannot hold two live places in the same slot on the same date
+-- One person cannot hold two LIVE places in the same slot on the same date.
+-- Dead states (cancelled/declined/expired/no_show) release the seat.
 create unique index uniq_live_booking
   on bookings (slot_id, booking_date, abhyasi_id)
-  where status <> 'cancelled';
+  where status not in ('cancelled', 'declined', 'expired', 'no_show');
 
 -- =====================================================================
 -- CAPACITY GUARD — refuse a booking that would overfill a slot.
@@ -132,7 +163,7 @@ declare
   slot_capacity int;
   live_count int;
 begin
-  if (new.status = 'cancelled') then
+  if new.status in ('cancelled', 'declined', 'expired', 'no_show') then
     return new;
   end if;
 
@@ -143,7 +174,7 @@ begin
   from bookings
   where slot_id = new.slot_id
     and booking_date = new.booking_date
-    and status <> 'cancelled'
+    and status not in ('cancelled', 'declined', 'expired', 'no_show')
     and id <> new.id;
 
   if live_count >= slot_capacity then
@@ -157,6 +188,101 @@ $$ language plpgsql;
 create trigger trg_check_capacity
   before insert or update on bookings
   for each row execute function check_slot_capacity();
+
+-- =====================================================================
+-- BOOKING DEFAULTS — on insert, stamp the preceptor and honour
+-- a preceptor's "auto_confirm" preference.
+-- =====================================================================
+create or replace function set_booking_defaults()
+returns trigger as $$
+declare
+  slot_preceptor uuid;
+  precep_auto    boolean;
+begin
+  select preceptor_id into slot_preceptor from availability_slots where id = new.slot_id;
+  new.preceptor_id := slot_preceptor;
+  if new.requested_at is null then new.requested_at := now(); end if;
+
+  if new.status = 'requested' then
+    select auto_confirm into precep_auto from profiles where id = slot_preceptor;
+    if coalesce(precep_auto, false) then
+      new.status := 'confirmed';
+      new.confirmed_at := now();
+    end if;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+-- Name sorts before trg_check_capacity, so defaults are applied first.
+create trigger trg_booking_defaults
+  before insert on bookings
+  for each row execute function set_booking_defaults();
+
+-- =====================================================================
+-- STATE MACHINE GUARD — enforce who may make which status transition,
+-- and stamp confirmed_at / decided_at / decided_by automatically.
+-- A null auth.uid() (pg_cron / service role) or an admin = "system".
+-- =====================================================================
+create or replace function on_booking_status_change()
+returns trigger as $$
+declare
+  actor      uuid    := auth.uid();
+  is_precep  boolean := (actor is not null and actor = old.preceptor_id);
+  is_abhy    boolean := (actor is not null and actor = old.abhyasi_id);
+  is_sys     boolean := (actor is null or is_admin());
+  ok         boolean := false;
+begin
+  if new.status is distinct from old.status then
+    if old.status in ('completed', 'no_show', 'declined', 'expired', 'cancelled') then
+      raise exception 'This sitting is already %; its status cannot change.', old.status;
+    end if;
+
+    if new.status = 'cancelled'
+       and (is_precep or is_abhy or is_sys)
+       and old.status in ('requested', 'confirmed', 'reminded', 'alternate_proposed') then
+      ok := true;
+    end if;
+
+    if (is_precep or is_sys) and old.status = 'requested'
+       and new.status in ('confirmed', 'declined', 'alternate_proposed') then
+      ok := true;
+    end if;
+
+    if (is_precep or is_sys) and old.status in ('confirmed', 'reminded')
+       and new.status in ('completed', 'no_show') then
+      ok := true;
+    end if;
+
+    if (is_abhy or is_sys) and old.status = 'alternate_proposed'
+       and new.status = 'confirmed' then
+      ok := true;
+    end if;
+
+    if is_sys and (
+         (old.status = 'confirmed' and new.status = 'reminded')
+      or (old.status = 'requested' and new.status = 'expired')
+    ) then
+      ok := true;
+    end if;
+
+    if not ok then
+      raise exception 'You are not allowed to move this sitting from % to %.', old.status, new.status;
+    end if;
+
+    if new.status = 'confirmed' and new.confirmed_at is null then
+      new.confirmed_at := now();
+    end if;
+    new.decided_at := now();
+    if actor is not null then new.decided_by := actor; end if;
+  end if;
+  return new;
+end;
+$$ language plpgsql security definer;
+
+create trigger trg_booking_status_change
+  before update on bookings
+  for each row execute function on_booking_status_change();
 
 -- =====================================================================
 -- ROW LEVEL SECURITY
@@ -289,7 +415,8 @@ as $$
   left join (
     select slot_id, count(*) as cnt
     from bookings
-    where booking_date = target_date and status <> 'cancelled'
+    where booking_date = target_date
+      and status not in ('cancelled', 'declined', 'expired', 'no_show')
     group by slot_id
   ) b on b.slot_id = s.id
   where s.is_active = true

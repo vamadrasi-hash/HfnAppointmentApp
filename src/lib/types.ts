@@ -1,7 +1,26 @@
 // TypeScript shapes that mirror the database tables.
 
-export type UserRole = 'abhyasi' | 'preceptor' | 'admin'
-export type BookingStatus = 'confirmed' | 'cancelled' | 'completed'
+export type UserRole = 'abhyasi' | 'preceptor' | 'coordinator' | 'admin'
+
+// The full sitting lifecycle. See the state machine in the spec.
+export type BookingStatus =
+  | 'requested'
+  | 'confirmed'
+  | 'alternate_proposed'
+  | 'declined'
+  | 'cancelled'
+  | 'reminded'
+  | 'completed'
+  | 'no_show'
+  | 'expired'
+
+// States where the sitting is still "live" (holds a seat, needs attention).
+export const LIVE_STATUSES: BookingStatus[] = [
+  'requested',
+  'confirmed',
+  'alternate_proposed',
+  'reminded',
+]
 
 export interface Zone {
   id: string
@@ -41,6 +60,7 @@ export interface Profile {
   city: string | null
   home_latitude: number | null
   home_longitude: number | null
+  auto_confirm?: boolean
   created_at?: string
   updated_at?: string
 }
@@ -61,9 +81,21 @@ export interface Booking {
   id: string
   slot_id: string
   abhyasi_id: string
+  preceptor_id: string | null
   booking_date: string // 'YYYY-MM-DD'
   status: BookingStatus
   note: string | null
+  // confirmation workflow
+  requested_at?: string | null
+  confirmed_at?: string | null
+  decided_at?: string | null
+  cancel_reason?: string | null
+  decline_reason?: string | null
+  // preceptor-proposed alternate time
+  alternate_date?: string | null
+  alternate_start_time?: string | null
+  alternate_end_time?: string | null
+  channel_used?: string | null
   created_at?: string
 }
 

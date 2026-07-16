@@ -1,4 +1,29 @@
 import { format, parse, addDays, startOfToday, isBefore } from 'date-fns'
+import type { BookingStatus } from './types'
+
+// ---- Booking status display ------------------------------------------
+// Badge tones must match the set defined in components/ui.tsx.
+export type StatusTone = 'brand' | 'gold' | 'neutral' | 'green' | 'red' | 'amber'
+
+export const STATUS_META: Record<BookingStatus, { label: string; tone: StatusTone }> = {
+  requested:          { label: 'Awaiting confirmation', tone: 'amber' },
+  confirmed:          { label: 'Confirmed',              tone: 'brand' },
+  alternate_proposed: { label: 'New time proposed',      tone: 'gold' },
+  declined:           { label: 'Declined',               tone: 'red' },
+  cancelled:          { label: 'Cancelled',              tone: 'neutral' },
+  reminded:           { label: 'Confirmed',              tone: 'brand' },
+  completed:          { label: 'Completed',              tone: 'green' },
+  no_show:            { label: 'No-show',                tone: 'red' },
+  expired:            { label: 'Expired',                tone: 'neutral' },
+}
+
+export function statusLabel(s: BookingStatus): string {
+  return STATUS_META[s]?.label ?? s
+}
+
+export function statusTone(s: BookingStatus): StatusTone {
+  return STATUS_META[s]?.tone ?? 'neutral'
+}
 
 // ---- Days of the week -------------------------------------------------
 // Stored values follow JavaScript's getDay(): 0=Sunday ... 6=Saturday.
