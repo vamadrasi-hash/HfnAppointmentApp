@@ -61,7 +61,10 @@ export default function Dashboard() {
     getMyBookings(user.id)
       .then((all) => {
         const upcoming = all
-          .filter((b) => b.status !== 'cancelled' && !isPastDate(b.booking_date))
+          .filter(
+            (b) =>
+              (b.status === 'confirmed' || b.status === 'reminded') && !isPastDate(b.booking_date),
+          )
           .sort((a, b) => a.booking_date.localeCompare(b.booking_date))
         setNext(upcoming[0] ?? null)
       })
@@ -126,7 +129,7 @@ export default function Dashboard() {
             to="/find"
             icon={<Search className="h-5 w-5" />}
             title="Find a sitting"
-            subtitle="Browse preceptors and book a time"
+            subtitle="Browse preceptors and request a time"
           />
 
           {isPreceptor && (
@@ -141,7 +144,7 @@ export default function Dashboard() {
                 to="/sittings"
                 icon={<CalendarClock className="h-5 w-5" />}
                 title="Incoming sittings"
-                subtitle="See who has booked with you"
+                subtitle="Confirm and manage requests"
               />
             </>
           )}

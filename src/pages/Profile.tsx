@@ -37,6 +37,8 @@ export default function Profile() {
   )
   const [geoState, setGeoState] = useState<'idle' | 'loading' | 'error'>('idle')
 
+  const [autoConfirm, setAutoConfirm] = useState(profile?.auto_confirm ?? false)
+
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -105,6 +107,7 @@ export default function Profile() {
         city: selectedCenter?.city ?? profile?.city ?? null,
         home_latitude: coords?.lat ?? null,
         home_longitude: coords?.lng ?? null,
+        ...(isPreceptor ? { auto_confirm: autoConfirm } : {}),
       })
       setProfile(updated)
       setSaved(true)
@@ -169,6 +172,38 @@ export default function Profile() {
           </Link>
         )}
       </div>
+
+      {/* Preceptor: auto-confirm preference */}
+      {isPreceptor && (
+        <Card>
+          <label className="flex cursor-pointer items-start justify-between gap-3">
+            <span>
+              <span className="block font-medium text-ink-800">Auto-confirm requests</span>
+              <span className="mt-0.5 block text-sm text-ink-500">
+                When on, sitting requests are confirmed instantly instead of waiting for you to
+                approve each one.
+              </span>
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoConfirm}
+              onClick={() => setAutoConfirm((v) => !v)}
+              className={
+                'relative mt-1 inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ' +
+                (autoConfirm ? 'bg-brand-600' : 'bg-slate-300')
+              }
+            >
+              <span
+                className={
+                  'inline-block h-5 w-5 transform rounded-full bg-white transition-transform ' +
+                  (autoConfirm ? 'translate-x-5' : 'translate-x-0.5')
+                }
+              />
+            </button>
+          </label>
+        </Card>
+      )}
 
       {/* Editable details */}
       <Card className="space-y-4">

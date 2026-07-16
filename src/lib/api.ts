@@ -233,9 +233,12 @@ export async function findPreceptors(
 }
 
 // ------------------------------------------------------------------
-// BOOKINGS
+// BOOKINGS — the request -> confirm state machine
 // ------------------------------------------------------------------
-export async function createBooking(input: {
+
+// Abhyasi asks for a sitting. It starts as 'requested' unless the
+// preceptor has auto_confirm on (the DB trigger handles that).
+export async function requestSitting(input: {
   slotId: string
   abhyasiId: string
   date: string
@@ -246,24 +249,80 @@ export async function createBooking(input: {
     abhyasi_id: input.abhyasiId,
     booking_date: input.date,
     note: input.note ?? null,
-    status: 'confirmed',
+    status: 'requested',
   })
   if (error) throw error
 }
 
-export async function cancelBooking(bookingId: string): Promise<void> {
+// ---- Preceptor decisions on a request ----
+export async function confirmBooking(bookingId: string): Promise<void> {
   const { error } = await supabase
     .from('bookings')
-    .update({ status: 'cancelled' })
+    .update({ status: 'confirmed' })
     .eq('id', bookingId)
   if (error) throw error
 }
 
-export async function setBookingStatus(
+export async function declineBooking(bookingId: string, reason?: string): Promise<void> {
+  const { error } = await supabase
+    .from('bookings')
+    .update({ status: 'declined', decline_reason: reason?.trim() || null })
+    .eq('id', bookingId)
+  if (error) throw error
+}
+
+export async function proposeAlternate(
   bookingId: string,
-  status: 'confirmed' | 'cancelled' | 'completed',
+  alt: { date: string; startTime: string; endTime?: string },
 ): Promise<void> {
-  const { error } = await supabase.from('bookings').update({ status }).eq('id', bookingId)
+  const { error } = await supabase
+    .from('bookings')
+    .update({
+      status: 'alternate_proposed',
+      alternate_date: alt.date,
+      alternate_start_time: alt.startTime,
+      alternate_end_time: alt.endTime ?? null,
+    })
+    .eq('id', bookingId)
+  if (error) throw error
+}
+
+// ---- Abhyasi responding to a proposed alternate ----
+export async function acceptAlternate(bookingId: string, alternateDate: string): Promise<void> {
+  const { error } = await supabase
+    .from('bookings')
+    .update({ status: 'confirmed', booking_date: alternateDate })
+    .eq('id', bookingId)
+  if (error) throw error
+}
+
+export async function rejectAlternate(bookingId: string): Promise<void> {
+  return cancelBooking(bookingId, 'Proposed alternate time was declined.')
+}
+
+// ---- Cancellation (either party) ----
+export async function cancelBooking(bookingId: string, reason?: string): Promise<void> {
+  const { error } = await supabase
+    .from('bookings')
+    .update({ status: 'cancelled', cancel_reason: reason?.trim() || null })
+    .eq('id', bookingId)
+  if (error) throw error
+}
+
+// ---- Preceptor recording the outcome ----
+export async function markCompleted(bookingId: string): Promise<void> {
+  const { error } = await supabase
+    .from('bookings')
+    .update({ status: 'completed' })
+    .eq('id', bookingId)
+  if (error) throw error
+}
+
+export async function markNoShow(bookingId: string): Promise<void> {
+  const { error } = await supabase
+    .from('bookings')
+    .update({ status: 'no_show' })
+    .eq('id', bookingId)
   if (error) throw error
 }
 
@@ -273,7 +332,9 @@ export async function getMyBookings(userId: string): Promise<BookingDetail[]> {
     .from('bookings')
     .select(
       `
-      id, slot_id, abhyasi_id, booking_date, status, note, created_at,
+      id, slot_id, abhyasi_id, preceptor_id, booking_date, status, note, created_at,
+      requested_at, confirmed_at, decided_at, cancel_reason, decline_reason,
+      alternate_date, alternate_start_time, alternate_end_time, channel_used,
       slot:availability_slots (
         id, preceptor_id, center_id, day_of_week, start_time, end_time, capacity, is_active, note,
         preceptor:profiles ( id, full_name, phone ),
@@ -289,10 +350,20 @@ export async function getMyBookings(userId: string): Promise<BookingDetail[]> {
     id: b.id,
     slot_id: b.slot_id,
     abhyasi_id: b.abhyasi_id,
+    preceptor_id: b.preceptor_id,
     booking_date: b.booking_date,
     status: b.status,
     note: b.note,
     created_at: b.created_at,
+    requested_at: b.requested_at,
+    confirmed_at: b.confirmed_at,
+    decided_at: b.decided_at,
+    cancel_reason: b.cancel_reason,
+    decline_reason: b.decline_reason,
+    alternate_date: b.alternate_date,
+    alternate_start_time: b.alternate_start_time,
+    alternate_end_time: b.alternate_end_time,
+    channel_used: b.channel_used,
     slot: b.slot
       ? {
           id: b.slot.id,
@@ -327,7 +398,9 @@ export async function getMySittings(preceptorId: string): Promise<BookingDetail[
     .from('bookings')
     .select(
       `
-      id, slot_id, abhyasi_id, booking_date, status, note, created_at,
+      id, slot_id, abhyasi_id, preceptor_id, booking_date, status, note, created_at,
+      requested_at, confirmed_at, decided_at, cancel_reason, decline_reason,
+      alternate_date, alternate_start_time, alternate_end_time, channel_used,
       slot:availability_slots ( id, preceptor_id, center_id, day_of_week, start_time, end_time, capacity, is_active, note,
         center:centers ( id, name, city ) ),
       abhyasi:profiles ( id, full_name, phone )
@@ -341,10 +414,20 @@ export async function getMySittings(preceptorId: string): Promise<BookingDetail[
     id: b.id,
     slot_id: b.slot_id,
     abhyasi_id: b.abhyasi_id,
+    preceptor_id: b.preceptor_id,
     booking_date: b.booking_date,
     status: b.status,
     note: b.note,
     created_at: b.created_at,
+    requested_at: b.requested_at,
+    confirmed_at: b.confirmed_at,
+    decided_at: b.decided_at,
+    cancel_reason: b.cancel_reason,
+    decline_reason: b.decline_reason,
+    alternate_date: b.alternate_date,
+    alternate_start_time: b.alternate_start_time,
+    alternate_end_time: b.alternate_end_time,
+    channel_used: b.channel_used,
     slot: b.slot
       ? {
           id: b.slot.id,

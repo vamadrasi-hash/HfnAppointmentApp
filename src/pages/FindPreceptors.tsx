@@ -14,7 +14,7 @@ import {
   getAreas,
   getCities,
   findPreceptors,
-  createBooking,
+  requestSitting,
   type SlotFilters,
 } from '../lib/api'
 import type { Zone, Center, Area, AvailableSlot, PreceptorWithSlots } from '../lib/types'
@@ -172,30 +172,33 @@ export default function FindPreceptors() {
     setBookError(null)
   }
 
-  async function confirmBooking() {
+  async function submitRequest() {
     if (!target || !user) return
     setBooking(true)
     setBookError(null)
     try {
-      await createBooking({
+      await requestSitting({
         slotId: target.slot.id,
         abhyasiId: user.id,
         date,
         note: note.trim() || undefined,
       })
       setTarget(null)
-      setSuccess(`Sitting booked with ${target.preceptor.full_name} on ${prettyDate(date)}.`)
-      window.setTimeout(() => setSuccess(null), 6000)
+      setSuccess(
+        `Request sent to ${target.preceptor.full_name} for ${prettyDate(date)}. ` +
+          `You'll be notified once it's confirmed.`,
+      )
+      window.setTimeout(() => setSuccess(null), 7000)
       runSearch() // refresh remaining counts
     } catch (e: any) {
       const code = e?.code as string | undefined
       const msg = (e?.message as string | undefined) ?? ''
       if (code === '23505' || /duplicate|unique/i.test(msg)) {
-        setBookError('You have already booked this slot for this date.')
+        setBookError('You already have a request or sitting for this slot on this date.')
       } else if (code === 'P0001' || /full/i.test(msg)) {
         setBookError('This slot just filled up. Please choose another time.')
       } else {
-        setBookError(msg || 'Could not complete the booking. Please try again.')
+        setBookError(msg || 'Could not send your request. Please try again.')
       }
     } finally {
       setBooking(false)
@@ -207,7 +210,7 @@ export default function FindPreceptors() {
       <div>
         <h1 className="font-serif text-2xl text-ink-900">Find a sitting</h1>
         <p className="mt-1 text-sm text-ink-500">
-          Pick a day, then book an open time with a preceptor.
+          Pick a day, then request an open time. The preceptor confirms your sitting.
         </p>
       </div>
 
@@ -401,14 +404,14 @@ export default function FindPreceptors() {
       <Modal
         open={!!target}
         onClose={() => (booking ? null : setTarget(null))}
-        title="Confirm your sitting"
+        title="Request this sitting"
         footer={
           <>
             <Button variant="ghost" onClick={() => setTarget(null)} disabled={booking}>
               Cancel
             </Button>
-            <Button onClick={confirmBooking} loading={booking} className="flex-1">
-              Confirm booking
+            <Button onClick={submitRequest} loading={booking} className="flex-1">
+              Send request
             </Button>
           </>
         }
