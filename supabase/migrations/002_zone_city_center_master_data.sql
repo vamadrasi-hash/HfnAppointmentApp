@@ -1,25 +1,35 @@
 -- =====================================================================
--- MASTER DATA — Gujarat zones & centers
--- Run this AFTER schema.sql, in the Supabase SQL Editor.
+-- 002 — Zone + City/Center master data (Gujarat)
 --
--- Source: the Gujarat "Zone / Center / City" master sheet.
---   * 5 zones (4 real zones + one bucket for centers with no zone yet)
---   * 142 centers, each tagged with the city it sits in where known.
+-- What this changes
+--   1. centers.city becomes nullable — some centers in the master sheet
+--      have no city yet, and they must still be selectable.
+--   2. The old placeholder zones/centers/areas are replaced with the real
+--      Gujarat master data (5 zones, 142 centers).
+--   3. profiles.area_id / the `areas` table are no longer used by the app.
+--      They are left in place so nothing breaks; the app now asks only for
+--      a zone and a city/center.
 --
--- The app asks for exactly two things: a **Zone**, then a searchable
--- **City / Center** — so `city` here is what groups the centers together
--- in that second dropdown. Centers with a null city are still listed;
--- they appear under "Other centers".
+-- HEADS UP: step 2 deletes the existing zones and centers. Any profile or
+-- availability slot that pointed at an old center has that reference set to
+-- null (the foreign keys are `on delete set null` / `on delete cascade` for
+-- areas). Preceptors will need to re-pick their center. On a fresh install
+-- there is nothing to lose.
 --
--- Districts and talukas from the source sheet are deliberately NOT
--- imported — the app does not use them.
---
--- Re-running this file: clear the tables first (this also detaches any
--- profiles / slots that pointed at the old rows):
---     delete from centers;
---     delete from zones;
+-- Run this ONCE in the Supabase SQL Editor.
 -- =====================================================================
 
+-- ---- 1. city is optional --------------------------------------------
+alter table centers alter column city drop not null;
+
+-- ---- 2. clear the old master data ------------------------------------
+-- Detach the rows that reference centers/zones, then drop them.
+update profiles set area_id = null;
+delete from areas;
+delete from centers;   -- profiles.center_id / slots.center_id -> null
+delete from zones;     -- profiles.zone_id -> null
+
+-- ---- 3. load the real Gujarat master data ---------------------------
 -- ---------------- ZONES ----------------
 insert into zones (name, description, sort_order) values
   ('Zone 6A - Gujarat North', 'North Gujarat — Ahmedabad, Gandhinagar, Mehsana, Sabarkantha, Banaskantha', 1),
@@ -188,8 +198,3 @@ from (values
   ('Zone 6 - Gujarat (unassigned)', 'Udhana'                        , null)
 ) as c(zone_name, name, city)
 join zones z on z.name = c.zone_name;
-
--- Quick sanity check (optional): see what was loaded
--- select z.name as zone, count(*) as centers, count(distinct c.city) as cities
--- from zones z left join centers c on c.zone_id = z.id
--- group by z.name, z.sort_order order by z.sort_order;

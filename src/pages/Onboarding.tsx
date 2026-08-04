@@ -2,9 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { MapPin, Loader2, Check } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { getZones, getCenters, getAreas, upsertProfile } from '../lib/api'
-import type { Zone, Center, Area, UserRole } from '../lib/types'
+import { upsertProfile } from '../lib/api'
+import type { UserRole } from '../lib/types'
 import { Button, Card, Field, Input, Select } from '../components/ui'
+import { ZoneCenterPicker, type ZoneCenterValue } from '../components/ZoneCenterPicker'
 
 // First-run screen: collect the details we need before showing the app.
 export default function Onboarding() {
@@ -25,13 +26,9 @@ export default function Onboarding() {
   const [phone, setPhone] = useState('')
   const [role, setRole] = useState<UserRole>('abhyasi')
 
-  const [zones, setZones] = useState<Zone[]>([])
-  const [centers, setCenters] = useState<Center[]>([])
-  const [areas, setAreas] = useState<Area[]>([])
-
-  const [zoneId, setZoneId] = useState('')
-  const [centerId, setCenterId] = useState('')
-  const [areaId, setAreaId] = useState('')
+  // Zone + the searchable City / Center list. `city` rides along so we can
+  // stamp it onto the profile without another lookup.
+  const [place, setPlace] = useState<ZoneCenterValue>({ zoneId: '', centerId: '', city: null })
 
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null)
   const [geoState, setGeoState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
@@ -42,31 +39,6 @@ export default function Onboarding() {
   useEffect(() => {
     setFullName((n) => n || prefillName)
   }, [prefillName])
-
-  // Load zones once.
-  useEffect(() => {
-    getZones().then(setZones).catch((e) => setError(e.message))
-  }, [])
-
-  // When the zone changes, load its centers and reset the deeper levels.
-  useEffect(() => {
-    setCenterId('')
-    setAreaId('')
-    setCenters([])
-    setAreas([])
-    if (!zoneId) return
-    getCenters(zoneId).then(setCenters).catch((e) => setError(e.message))
-  }, [zoneId])
-
-  // When the center changes, load its areas and reset the area.
-  useEffect(() => {
-    setAreaId('')
-    setAreas([])
-    if (!centerId) return
-    getAreas(centerId).then(setAreas).catch((e) => setError(e.message))
-  }, [centerId])
-
-  const selectedCenter = centers.find((c) => c.id === centerId)
 
   function useMyLocation() {
     if (!('geolocation' in navigator)) {
@@ -99,10 +71,9 @@ export default function Onboarding() {
         email: user.email ?? null,
         phone: phone.trim() || null,
         role,
-        zone_id: zoneId || null,
-        center_id: centerId || null,
-        area_id: areaId || null,
-        city: selectedCenter?.city ?? null,
+        zone_id: place.zoneId || null,
+        center_id: place.centerId || null,
+        city: place.city,
         home_latitude: coords?.lat ?? null,
         home_longitude: coords?.lng ?? null,
       })
@@ -160,52 +131,11 @@ export default function Onboarding() {
 
         <div className="border-t border-brand-50 pt-4">
           <p className="mb-3 text-sm font-medium text-ink-700">Where you belong</p>
-          <div className="space-y-3">
-            <Field label="Zone">
-              <Select value={zoneId} onChange={(e) => setZoneId(e.target.value)}>
-                <option value="">Select your zone</option>
-                {zones.map((z) => (
-                  <option key={z.id} value={z.id}>
-                    {z.name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-
-            <Field label="Center">
-              <Select
-                value={centerId}
-                onChange={(e) => setCenterId(e.target.value)}
-                disabled={!zoneId}
-              >
-                <option value="">
-                  {zoneId ? 'Select your center' : 'Choose a zone first'}
-                </option>
-                {centers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} — {c.city}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-
-            <Field label="Area" hint="Optional">
-              <Select
-                value={areaId}
-                onChange={(e) => setAreaId(e.target.value)}
-                disabled={!centerId}
-              >
-                <option value="">
-                  {centerId ? 'Select your area' : 'Choose a center first'}
-                </option>
-                {areas.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-          </div>
+          <ZoneCenterPicker
+            zoneId={place.zoneId}
+            centerId={place.centerId}
+            onChange={setPlace}
+          />
         </div>
 
         <div className="border-t border-brand-50 pt-4">

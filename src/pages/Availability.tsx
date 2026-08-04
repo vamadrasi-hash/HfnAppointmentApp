@@ -1,10 +1,17 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Plus, Pencil, Trash2, Clock, Users, Info, CalendarPlus } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { getMySlots, createSlot, updateSlot, deleteSlot, getCenters } from '../lib/api'
+import { getMySlots, createSlot, updateSlot, deleteSlot } from '../lib/api'
 import type { AvailabilitySlot, Center } from '../lib/types'
+import {
+  centerFullLabel,
+  centerGroup,
+  compareCenters,
+  loadMasterData,
+} from '../lib/masterData'
 import { Badge, Button, Card, EmptyState, Field, Input, PageLoader, Select } from '../components/ui'
+import { Combobox, type ComboOption } from '../components/Combobox'
 import { Modal } from '../components/Modal'
 import { WEEK_DAYS, dayLabel, formatTimeRange, formatTime } from '../lib/utils'
 
@@ -54,9 +61,9 @@ export default function Availability() {
     setLoading(true)
     setError(null)
     try {
-      const [mySlots, allCenters] = await Promise.all([getMySlots(user.id), getCenters()])
+      const [mySlots, master] = await Promise.all([getMySlots(user.id), loadMasterData()])
       setSlots(mySlots)
-      setCenters(allCenters)
+      setCenters(master.centers)
     } catch (e: any) {
       setError(e.message ?? 'Could not load your schedule.')
     } finally {
@@ -68,6 +75,19 @@ export default function Availability() {
     if (isPreceptor) load()
     else setLoading(false)
   }, [isPreceptor, load])
+
+  // The same searchable "City / Center" list the profile screens use.
+  const centerOptions = useMemo<ComboOption[]>(
+    () =>
+      [...centers].sort(compareCenters).map((c) => ({
+        value: c.id,
+        label: c.name,
+        triggerLabel: centerFullLabel(c),
+        group: centerGroup(c),
+        keywords: c.city ?? '',
+      })),
+    [centers],
+  )
 
   function openAdd() {
     setEditing(null)
@@ -232,7 +252,7 @@ export default function Availability() {
                             <Users className="h-3.5 w-3.5" />
                             {s.capacity} {s.capacity > 1 ? 'places' : 'place'}
                           </span>
-                          {center && <span>{center.name}</span>}
+                          {center && <span>{centerFullLabel(center)}</span>}
                         </div>
                         {s.note && <p className="mt-1 text-xs text-ink-400">{s.note}</p>}
                       </div>
@@ -317,18 +337,15 @@ export default function Availability() {
             />
           </Field>
 
-          <Field label="Center">
-            <Select
+          <Field label="City / Center" hint="Where this sitting happens. Search by city or center.">
+            <Combobox
               value={form.center_id}
-              onChange={(e) => setForm({ ...form, center_id: e.target.value })}
-            >
-              <option value="">Not specified</option>
-              {centers.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} — {c.city}
-                </option>
-              ))}
-            </Select>
+              options={centerOptions}
+              onChange={(v) => setForm({ ...form, center_id: v })}
+              placeholder="Not specified"
+              searchPlaceholder="Type a city or center…"
+              clearable
+            />
           </Field>
 
           <Field label="Note" hint="Optional — e.g. ‘Only for new practitioners’.">

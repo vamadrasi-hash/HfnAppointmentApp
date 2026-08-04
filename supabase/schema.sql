@@ -35,11 +35,11 @@ create type booking_status as enum (
 );
 
 -- =====================================================================
--- MASTER DATA: Zone -> Center -> Area
+-- MASTER DATA: Zone -> Center (grouped by city)
 -- =====================================================================
 create table zones (
   id          uuid primary key default uuid_generate_v4(),
-  name        text not null unique,            -- e.g. 'Zone A'
+  name        text not null unique,            -- e.g. 'Zone 6B - Gujarat South'
   description text,
   sort_order  int default 0,
   created_at  timestamptz default now()
@@ -48,14 +48,19 @@ create table zones (
 create table centers (
   id          uuid primary key default uuid_generate_v4(),
   zone_id     uuid not null references zones(id) on delete cascade,
-  name        text not null,                   -- e.g. 'Surat Central Center'
-  city        text not null,                   -- e.g. 'Surat'
+  name        text not null,                   -- e.g. 'Surat-West-Adajan'
+  -- The app shows one searchable "City / Center" list, grouped by city.
+  -- Nullable, because some centers in the master list have no city yet —
+  -- those are still listed, under "Other centers".
+  city        text,
   address     text,
   latitude    double precision,                -- for "near me" search
   longitude   double precision,
   created_at  timestamptz default now()
 );
 
+-- Areas are not used by the app (it asks only for a zone and a city/center).
+-- The table is kept so existing data and the profiles.area_id column stay valid.
 create table areas (
   id          uuid primary key default uuid_generate_v4(),
   center_id   uuid not null references centers(id) on delete cascade,
@@ -81,8 +86,8 @@ create table profiles (
   -- where this person belongs (and, for preceptors, where they give sittings)
   zone_id         uuid references zones(id) on delete set null,
   center_id       uuid references centers(id) on delete set null,
-  area_id         uuid references areas(id) on delete set null,
-  city            text,
+  area_id         uuid references areas(id) on delete set null,  -- unused by the app
+  city            text,                        -- copied from the chosen center
   -- geolocation (used by the "near me" feature)
   home_latitude   double precision,
   home_longitude  double precision,
@@ -378,7 +383,7 @@ create policy "delete own booking" on bookings
 -- already taken on that date. It runs as SECURITY DEFINER so an abhyasi
 -- can see the *count* of taken places without being able to read other
 -- people's private bookings (which RLS still protects).
--- The app applies the zone / center / area / city / time filters on top.
+-- The app applies the zone / center / time filters on top.
 -- =====================================================================
 create or replace function find_available_slots(target_date date)
 returns table (

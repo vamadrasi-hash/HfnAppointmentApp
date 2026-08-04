@@ -2,7 +2,6 @@ import { supabase } from './supabase'
 import type {
   Zone,
   Center,
-  Area,
   Profile,
   AvailabilitySlot,
   AvailableSlot,
@@ -24,6 +23,8 @@ export async function getZones(): Promise<Zone[]> {
   return data ?? []
 }
 
+// Called with no zone this returns every center; the app caches the whole
+// list once (see lib/masterData.ts) and filters it in memory.
 export async function getCenters(zoneId?: string): Promise<Center[]> {
   let q = supabase.from('centers').select('*').order('name', { ascending: true })
   if (zoneId) q = q.eq('zone_id', zoneId)
@@ -32,20 +33,6 @@ export async function getCenters(zoneId?: string): Promise<Center[]> {
   return data ?? []
 }
 
-export async function getAreas(centerId?: string): Promise<Area[]> {
-  let q = supabase.from('areas').select('*').order('name', { ascending: true })
-  if (centerId) q = q.eq('center_id', centerId)
-  const { data, error } = await q
-  if (error) throw error
-  return data ?? []
-}
-
-export async function getCities(): Promise<string[]> {
-  const { data, error } = await supabase.from('centers').select('city')
-  if (error) throw error
-  const set = new Set((data ?? []).map((r) => r.city).filter(Boolean))
-  return Array.from(set).sort()
-}
 
 // ------------------------------------------------------------------
 // PROFILE
@@ -117,8 +104,6 @@ export interface SlotFilters {
   date: string // ISO yyyy-MM-dd
   zoneId?: string
   centerId?: string
-  areaId?: string
-  city?: string
   fromTime?: string // 'HH:MM' inclusive
   toTime?: string // 'HH:MM' inclusive
   origin?: { lat: number; lng: number } | null // for "near me" sorting
@@ -159,8 +144,6 @@ export async function findPreceptors(
   const filtered = rows.filter((r) => {
     if (filters.zoneId && r.center_zone_id !== filters.zoneId) return false
     if (filters.centerId && r.center_id !== filters.centerId) return false
-    if (filters.areaId && r.preceptor_area_id !== filters.areaId) return false
-    if (filters.city && r.center_city !== filters.city) return false
     if (filters.fromTime && r.start_time.slice(0, 5) < filters.fromTime) return false
     if (filters.toTime && r.start_time.slice(0, 5) > filters.toTime) return false
     return true
@@ -188,7 +171,7 @@ export async function findPreceptors(
         ? {
             id: r.center_id,
             name: r.center_name ?? '',
-            city: r.center_city ?? '',
+            city: r.center_city,
             latitude: r.center_lat,
             longitude: r.center_lng,
           }
@@ -205,7 +188,7 @@ export async function findPreceptors(
       byPreceptor.set(r.preceptor_id, {
         preceptor: { id: r.preceptor_id, full_name: r.preceptor_name, phone: r.preceptor_phone },
         center: r.center_id
-          ? { id: r.center_id, name: r.center_name ?? '', city: r.center_city ?? '' }
+          ? { id: r.center_id, name: r.center_name ?? '', city: r.center_city }
           : null,
         distanceKm: distance,
         slots: [],
