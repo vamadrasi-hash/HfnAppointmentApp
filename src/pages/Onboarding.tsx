@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { MapPin, Loader2, Check } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { upsertProfile } from '../lib/api'
+import { upsertProfile, saveHomePlace } from '../lib/api'
 import type { UserRole } from '../lib/types'
 import { Button, Card, Field, Input, Select } from '../components/ui'
 import { ZoneCenterPicker, type ZoneCenterValue } from '../components/ZoneCenterPicker'
@@ -74,10 +74,18 @@ export default function Onboarding() {
         zone_id: place.zoneId || null,
         center_id: place.centerId || null,
         city: place.city,
-        home_latitude: coords?.lat ?? null,
-        home_longitude: coords?.lng ?? null,
       })
-      setProfile(saved)
+      // Where you live is a table of its own, so it saves separately. The
+      // full address comes later, on the profile screen.
+      if (coords) {
+        await saveHomePlace(user.id, {
+          address: null,
+          latitude: coords.lat,
+          longitude: coords.lng,
+          map_url: null,
+        })
+      }
+      setProfile({ ...saved, home_place: coords ? { address: null, latitude: coords.lat, longitude: coords.lng, map_url: null } : null })
       navigate('/dashboard', { replace: true })
     } catch (e: any) {
       setError(e.message ?? 'Could not save your profile. Please try again.')

@@ -6,7 +6,7 @@
 
 -- ---- Clean slate (so you can re-run during setup) -------------------
 drop table if exists bookings cascade;
-drop table if exists slot_places cascade;
+drop table if exists home_places cascade;
 drop table if exists availability_slots cascade;
 drop table if exists profiles cascade;
 drop table if exists areas cascade;
@@ -118,17 +118,36 @@ create table profiles (
   center_id       uuid references centers(id) on delete set null,
   area_id         uuid references areas(id) on delete set null,  -- unused by the app
   city            text,                        -- copied from the chosen center
-  -- geolocation (used by the "near me" feature)
-  home_latitude   double precision,
-  home_longitude  double precision,
   -- Preceptor option: confirm incoming requests automatically (low-friction booking).
   auto_confirm    boolean not null default false,
   created_at      timestamptz default now(),
   updated_at      timestamptz default now()
+  -- Where this person lives is NOT here: see `home_places` below.
 );
 
 create index idx_profiles_center on profiles(center_id);
 create index idx_profiles_role on profiles(role);
+
+-- =====================================================================
+-- HOME PLACES — where a person lives. One row per profile.
+--
+-- This is deliberately not a column on `profiles`: that table is
+-- readable by every signed-in user (the app needs names on booking
+-- cards), and security rules work row by row, so an address kept there
+-- would be readable by all of them.
+--
+-- It serves two purposes at once: the origin for this person's own
+-- "near me" search, and — for a preceptor who gives sittings at home —
+-- the address an abhyasi is given once their sitting is confirmed.
+-- =====================================================================
+create table home_places (
+  profile_id uuid primary key references profiles(id) on delete cascade,
+  address    text,
+  latitude   double precision,
+  longitude  double precision,
+  map_url    text,
+  updated_at timestamptz default now()
+);
 
 -- =====================================================================
 -- AVAILABILITY SLOTS — a preceptor's recurring weekly openings
@@ -147,8 +166,8 @@ create table availability_slots (
   note          text,
   -- ---- where the sitting happens ----
   -- A heartspot sitting inherits its address from the heartspot (and that
-  -- one from its center). A home sitting keeps its address in the private
-  -- `slot_places` table below.
+  -- one from its center). A home sitting takes it from the preceptor's
+  -- own `home_places` row — they have one home, not one per slot.
   place_type    sitting_place not null default 'heartspot',
   heartspot_id  uuid references heartspots(id) on delete set null,
   created_at    timestamptz default now(),
@@ -159,24 +178,6 @@ create index idx_slots_preceptor on availability_slots(preceptor_id);
 create index idx_slots_day on availability_slots(day_of_week);
 create index idx_slots_center on availability_slots(center_id);
 create index idx_slots_heartspot on availability_slots(heartspot_id);
-
--- =====================================================================
--- SLOT PLACES — a preceptor's home address, kept apart on purpose.
---
--- Every signed-in user can read `availability_slots` — they have to, it
--- is how anyone finds an open time. Row level security is row-level, so
--- an address stored there would be readable by all of them. Holding it
--- in its own table is what makes "only after the sitting is confirmed"
--- enforceable rather than merely displayed.
--- =====================================================================
-create table slot_places (
-  slot_id    uuid primary key references availability_slots(id) on delete cascade,
-  address    text not null,
-  latitude   double precision,
-  longitude  double precision,
-  map_url    text,
-  updated_at timestamptz default now()
-);
 
 -- Keep the two halves of "where" consistent: a home sitting has no
 -- heartspot, and a heartspot must belong to the center the slot is filed
@@ -191,13 +192,10 @@ declare
   hs_center uuid;
 begin
   if new.place_type = 'home' then
+    -- The address lives on the preceptor's profile, so a home slot
+    -- carries nothing of its own beyond saying that it is one.
     new.heartspot_id := null;
   else
-    if tg_op = 'UPDATE' then
-      -- No longer a home sitting: the private address has nothing left to
-      -- describe, so it goes with it.
-      delete from slot_places where slot_id = new.id;
-    end if;
     if new.heartspot_id is not null then
       select center_id into hs_center from heartspots where id = new.heartspot_id;
       if hs_center is null then
@@ -402,7 +400,7 @@ alter table heartspots          enable row level security;
 alter table areas               enable row level security;
 alter table profiles            enable row level security;
 alter table availability_slots  enable row level security;
-alter table slot_places         enable row level security;
+alter table home_places         enable row level security;
 alter table bookings            enable row level security;
 
 -- Helper: is the current user an admin? (security definer bypasses RLS,
@@ -489,32 +487,26 @@ create policy "preceptor manage own slots" on availability_slots
   using (preceptor_id = auth.uid() or is_admin())
   with check (preceptor_id = auth.uid() or is_admin());
 
--- ---- Slot places (a preceptor's home address) -----------------------
--- The preceptor (or an admin) owns it outright.
-create policy "preceptor manages own slot place" on slot_places
+-- ---- Home places (where a person lives) -----------------------------
+-- Yours to edit, nobody else's (bar an admin).
+create policy "own home place manageable" on home_places
   for all to authenticated
-  using (
-    exists (
-      select 1 from availability_slots s
-      where s.id = slot_places.slot_id and (s.preceptor_id = auth.uid() or is_admin())
-    )
-  )
-  with check (
-    exists (
-      select 1 from availability_slots s
-      where s.id = slot_places.slot_id and (s.preceptor_id = auth.uid() or is_admin())
-    )
-  );
+  using (profile_id = auth.uid() or is_admin())
+  with check (profile_id = auth.uid() or is_admin());
 
--- An abhyasi sees it only once the sitting is actually on. 'requested' is
--- deliberately absent: asking is not the same as being invited. The
--- finished states stay readable so a past sitting still reads sensibly.
-create policy "slot place readable once confirmed" on slot_places
+-- An abhyasi sees a preceptor's home only once a sitting there is on.
+-- 'requested' is deliberately absent: asking is not the same as being
+-- invited. The finished states stay readable so a past sitting still
+-- reads sensibly.
+create policy "home place readable once confirmed" on home_places
   for select to authenticated
   using (
     exists (
-      select 1 from bookings b
-      where b.slot_id = slot_places.slot_id
+      select 1
+      from bookings b
+      join availability_slots s on s.id = b.slot_id
+      where s.preceptor_id = home_places.profile_id
+        and s.place_type = 'home'
         and b.abhyasi_id = auth.uid()
         and b.status in ('confirmed', 'reminded', 'completed', 'no_show')
     )
@@ -585,8 +577,8 @@ returns table (
   booked_count       bigint,
   -- Where the sitting happens. For a home sitting this is deliberately
   -- vague: no address, no link, and coordinates rounded to ~1 km. The
-  -- real address comes from `slot_places`, once there is a confirmed
-  -- booking to justify it.
+  -- real address comes from the preceptor's `home_places` row, once
+  -- there is a confirmed booking to justify reading it.
   place_type         text,
   heartspot_id       uuid,
   heartspot_name     text,
@@ -612,10 +604,10 @@ as $$
     -- Two decimal places is about 1.1 km — enough to sort by distance,
     -- not enough to point at a house.
     case when s.place_type = 'home'
-           then round(sp.latitude::numeric, 2)::double precision
+           then round(hp.latitude::numeric, 2)::double precision
          else coalesce(h.latitude, c.latitude) end,
     case when s.place_type = 'home'
-           then round(sp.longitude::numeric, 2)::double precision
+           then round(hp.longitude::numeric, 2)::double precision
          else coalesce(h.longitude, c.longitude) end,
     case when s.place_type = 'home' then null
          else coalesce(h.map_url, c.map_url) end
@@ -623,7 +615,7 @@ as $$
   join profiles p on p.id = s.preceptor_id
   left join centers c on c.id = s.center_id
   left join heartspots h on h.id = s.heartspot_id
-  left join slot_places sp on sp.slot_id = s.id
+  left join home_places hp on hp.profile_id = s.preceptor_id
   left join (
     select slot_id, count(*) as cnt
     from bookings

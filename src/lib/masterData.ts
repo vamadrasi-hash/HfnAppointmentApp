@@ -102,5 +102,7 @@ export {
   centerFullLabel,
   compareCenters,
   centersInZone,
+  centersInCity,
+  cityGroups,
   countCities,
 } from './centers'

@@ -107,8 +107,9 @@ export default function FindPreceptors() {
       },
       () => {
         // Fall back to the saved home location if the live one is refused.
-        if (profile?.home_latitude != null && profile?.home_longitude != null) {
-          setOrigin({ lat: profile.home_latitude, lng: profile.home_longitude })
+        const saved = profile?.home_place
+        if (saved?.latitude != null && saved?.longitude != null) {
+          setOrigin({ lat: saved.latitude, lng: saved.longitude })
           setNearMe(true)
           setGeoMsg('Using your saved home location.')
         } else {
