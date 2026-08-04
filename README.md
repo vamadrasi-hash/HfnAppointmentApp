@@ -300,7 +300,15 @@ Picking a city/center first is fine — the zone fills itself in.
 
 ### Already have the app running with the old sample data?
 
-Run **`supabase/migrations/002_zone_city_center_master_data.sql`** in the SQL Editor instead. It makes `city` optional and swaps the old placeholder zones/centers for the Gujarat data. Heads up: it clears the old zones and centers, so preceptors will need to re-pick their center once.
+Run the files in **`supabase/migrations/`** in the SQL Editor, in number order, instead of re-running `schema.sql`:
+
+| Migration | What it does |
+|---|---|
+| `002_zone_city_center_master_data.sql` | Makes `city` optional and swaps the old placeholder zones/centers for the Gujarat data. **Heads up:** it clears the old zones and centers, so preceptors will need to re-pick their center once. |
+| `003_security_hardening.sql` | Stops a user from making themselves an admin, and takes the internal trigger functions off the public API. |
+| `004_fix_capacity_guard.sql` | Fixes the over-booking bug described below. |
+
+A fresh `schema.sql` already includes 003 and 004 — the migrations are only for a database that already exists.
 
 ---
 
@@ -355,6 +363,8 @@ heartfulness-ams/
 ```
 
 How the **"places left"** count stays correct: the database itself refuses any booking that would over-fill a slot, even if two people tap **Book** at the exact same moment. So a slot can never be double-booked beyond its capacity.
+
+> This guard was broken until `004_fix_capacity_guard.sql`. The check counted the bookings already on a slot, but it ran with the booking person's own permissions — and those only let you see *your own* bookings. So the second person to book counted zero and was let in, and a one-place slot could take any number of people. If your database predates that migration, run it.
 
 ---
 
