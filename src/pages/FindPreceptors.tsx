@@ -8,17 +8,10 @@ import {
   Search as SearchIcon,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import {
-  getZones,
-  getCenters,
-  getAreas,
-  getCities,
-  findPreceptors,
-  requestSitting,
-  type SlotFilters,
-} from '../lib/api'
-import type { Zone, Center, Area, AvailableSlot, PreceptorWithSlots } from '../lib/types'
+import { findPreceptors, requestSitting, type SlotFilters } from '../lib/api'
+import type { AvailableSlot, PreceptorWithSlots } from '../lib/types'
 import { Button, Field, Select, PageLoader, EmptyState, Badge } from '../components/ui'
+import { ZoneCenterPicker, type ZoneCenterValue } from '../components/ZoneCenterPicker'
 import { PreceptorCard } from '../components/PreceptorCard'
 import { Modal } from '../components/Modal'
 import { upcomingDates, prettyDate, formatTimeRange, dayShort, cx } from '../lib/utils'
@@ -42,16 +35,8 @@ export default function FindPreceptors() {
 
   const [date, setDate] = useState(dates[0].iso)
 
-  // Filter master data
-  const [zones, setZones] = useState<Zone[]>([])
-  const [centers, setCenters] = useState<Center[]>([])
-  const [areas, setAreas] = useState<Area[]>([])
-  const [cities, setCities] = useState<string[]>([])
-
-  const [zoneId, setZoneId] = useState('')
-  const [centerId, setCenterId] = useState('')
-  const [areaId, setAreaId] = useState('')
-  const [city, setCity] = useState('')
+  // Where to look: a zone, then a city / center from the searchable list.
+  const [place, setPlace] = useState<ZoneCenterValue>({ zoneId: '', centerId: '', city: null })
   const [band, setBand] = useState<TimeBand>('')
 
   const [showFilters, setShowFilters] = useState(false)
@@ -73,30 +58,7 @@ export default function FindPreceptors() {
   const [bookError, setBookError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
-  // Load filter sources once.
-  useEffect(() => {
-    getZones().then(setZones).catch(() => {})
-    getCities().then(setCities).catch(() => {})
-  }, [])
-
-  useEffect(() => {
-    setCenterId('')
-    setAreaId('')
-    setCenters([])
-    setAreas([])
-    if (!zoneId) return
-    getCenters(zoneId).then(setCenters).catch(() => {})
-  }, [zoneId])
-
-  useEffect(() => {
-    setAreaId('')
-    setAreas([])
-    if (!centerId) return
-    getAreas(centerId).then(setAreas).catch(() => {})
-  }, [centerId])
-
-  const activeFilterCount =
-    (zoneId ? 1 : 0) + (centerId ? 1 : 0) + (areaId ? 1 : 0) + (city ? 1 : 0) + (band ? 1 : 0)
+  const activeFilterCount = (place.zoneId ? 1 : 0) + (place.centerId ? 1 : 0) + (band ? 1 : 0)
 
   const runSearch = useCallback(async () => {
     setLoading(true)
@@ -104,10 +66,8 @@ export default function FindPreceptors() {
     try {
       const filters: SlotFilters = {
         date,
-        zoneId: zoneId || undefined,
-        centerId: centerId || undefined,
-        areaId: areaId || undefined,
-        city: city || undefined,
+        zoneId: place.zoneId || undefined,
+        centerId: place.centerId || undefined,
         fromTime: band ? TIME_BANDS[band].from : undefined,
         toTime: band ? TIME_BANDS[band].to : undefined,
         origin: nearMe ? origin : null,
@@ -120,7 +80,7 @@ export default function FindPreceptors() {
     } finally {
       setLoading(false)
     }
-  }, [date, zoneId, centerId, areaId, city, band, nearMe, origin])
+  }, [date, place.zoneId, place.centerId, band, nearMe, origin])
 
   // Re-run whenever the date, any filter, or the location changes.
   useEffect(() => {
@@ -159,10 +119,7 @@ export default function FindPreceptors() {
   }
 
   function clearFilters() {
-    setZoneId('')
-    setCenterId('')
-    setAreaId('')
-    setCity('')
+    setPlace({ zoneId: '', centerId: '', city: null })
     setBand('')
   }
 
@@ -302,49 +259,12 @@ export default function FindPreceptors() {
             )}
           </div>
 
-          <Field label="Zone">
-            <Select value={zoneId} onChange={(e) => setZoneId(e.target.value)}>
-              <option value="">All zones</option>
-              {zones.map((z) => (
-                <option key={z.id} value={z.id}>
-                  {z.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
-
-          <Field label="Center">
-            <Select value={centerId} onChange={(e) => setCenterId(e.target.value)} disabled={!zoneId}>
-              <option value="">{zoneId ? 'All centers' : 'Choose a zone first'}</option>
-              {centers.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} — {c.city}
-                </option>
-              ))}
-            </Select>
-          </Field>
-
-          <Field label="Area">
-            <Select value={areaId} onChange={(e) => setAreaId(e.target.value)} disabled={!centerId}>
-              <option value="">{centerId ? 'All areas' : 'Choose a center first'}</option>
-              {areas.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
-
-          <Field label="City">
-            <Select value={city} onChange={(e) => setCity(e.target.value)}>
-              <option value="">All cities</option>
-              {cities.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </Select>
-          </Field>
+          <ZoneCenterPicker
+            mode="filter"
+            zoneId={place.zoneId}
+            centerId={place.centerId}
+            onChange={setPlace}
+          />
 
           <Field label="Time of day">
             <Select value={band} onChange={(e) => setBand(e.target.value as TimeBand)}>

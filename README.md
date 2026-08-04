@@ -1,6 +1,6 @@
 # Heartfulness Sittings — Appointment Management System
 
-A simple, mobile-first web app for the Heartfulness community in South Gujarat. **Preceptors** (trainers) publish the weekly times when they can give individual meditation sittings, and **abhyasis** (practitioners) browse those preceptors by zone, center, area or city and book an open slot. The app shows how many places are left in each slot and hides a slot once it is full.
+A simple, mobile-first web app for the Heartfulness community in South Gujarat. **Preceptors** (trainers) publish the weekly times when they can give individual meditation sittings, and **abhyasis** (practitioners) browse those preceptors by zone and by city/center and book an open slot. The app shows how many places are left in each slot and hides a slot once it is full.
 
 This guide assumes **no prior experience** with coding tools, command lines, or dashboards. Follow it from top to bottom and you will have the app running on your computer, and then live on the internet.
 
@@ -33,7 +33,7 @@ This guide assumes **no prior experience** with coding tools, command lines, or 
 
 **For abhyasis (practitioners):**
 - Sign in with Google or email.
-- Pick a day, then filter preceptors by zone, center, area, city or time of day.
+- Pick a day, then filter preceptors by zone, by city/center, or by time of day.
 - See each preceptor's open times and how many places remain (for example, "1 of 4 left").
 - Book a sitting, add an optional note, and later cancel it.
 - Optionally use "Near me" to sort preceptors by distance from your location.
@@ -45,7 +45,7 @@ This guide assumes **no prior experience** with coding tools, command lines, or 
 - See who has booked (with the person's phone number) and mark a sitting as completed or cancelled.
 
 **For admins:**
-- A read-only overview of all zones, centers and areas.
+- A read-only overview of all zones, cities and centers.
 
 ---
 
@@ -119,7 +119,7 @@ Supabase stores all the data — users, preceptors, slots and bookings.
 
 ## Step E — Load the sample data
 
-This loads example zones, centers and areas so you can see the app working immediately. You will replace these with your real data later (see [this section](#replacing-the-sample-data)).
+This loads the Gujarat master data — 5 zones and 142 centers, each tagged with its city. See [this section](#replacing-the-sample-data) if you need to change it.
 
 1. Still in the **SQL Editor**, click **+ New query** again.
 2. Open **`supabase/seed.sql`** from the project, copy all of it.
@@ -234,7 +234,7 @@ To **stop** the app later, click the Terminal window and press `Ctrl + C`. To st
 ### First run
 
 - Click **Continue with Google** (if you set it up) or create an account with email and password.
-- You will be taken to a short **welcome screen** to enter your name, phone, and choose your zone/center. Choose **Abhyasi** or **Preceptor**.
+- You will be taken to a short **welcome screen** to enter your name, phone, and choose your **zone** and your **city / center**. Choose **Abhyasi** or **Preceptor**.
 - After that you land on the home screen.
 
 ---
@@ -274,23 +274,33 @@ There are three roles:
 
 ## Replacing the sample data
 
-The app ships with example zones, centers and areas for South Gujarat. There are two easy ways to put in your **real** master data.
+The app asks each person for exactly two things about place:
+
+1. **Zone** — a short list (Zone 6A, 6B, 6C, 6D, plus a bucket for centers that don't carry a zone yet).
+2. **City / Center** — one searchable list where each city is a heading and its centers sit underneath it. Typing "Surat" brings up every Surat center; typing a center name finds it directly. Centers that have no city yet are still listed, at the end under **Other centers**.
+
+Picking a city/center first is fine — the zone fills itself in.
+
+`supabase/seed.sql` already holds the Gujarat master data: **5 zones and 142 centers**. Districts and talukas from the master sheet are deliberately not imported, because the app does not use them.
 
 ### Option 1 — Edit the seed file and re-run it (good for a full replacement)
 
 1. Open **`supabase/seed.sql`** in VS Code.
-2. You will see three clearly labelled blocks: **zones**, **centers**, and **areas**. Edit the names, cities, pincodes and (optionally) latitude/longitude to match your real data, following the same pattern that is already there.
+2. You will see two clearly labelled blocks: **zones** and **centers**. Each center row is `('<zone name>', '<center name>', '<city>')` — use `null` for the city if you don't know it yet. Follow the pattern already there.
 3. To apply your changes cleanly, first **re-run `schema.sql`** (Step D) to clear old data, then **run your edited `seed.sql`** (Step E).
-   - The latitude/longitude values are only used for the "Near me" distance feature. If you don't have them, you can leave them as `null`.
+   - Latitude/longitude on a center are only used for the "Near me" distance feature. Leave them out if you don't have them.
 
 ### Option 2 — Use the Supabase Table Editor (good for small additions)
 
 1. In Supabase, open **Table Editor** in the left sidebar.
 2. Choose the **zones** table and add your zones (click **Insert → Insert row**).
-3. Then open **centers**, add each center, and pick its **zone_id** from the dropdown.
-4. Then open **areas**, add each area, and pick its **center_id** from the dropdown.
+3. Then open **centers**, add each center, pick its **zone_id** from the dropdown, and type its **city** (leave city blank if unknown — the center still appears, under "Other centers").
 
-> The order matters: zones first, then centers, then areas, because each one points to the level above it.
+> The order matters: zones first, then centers, because a center points at its zone.
+
+### Already have the app running with the old sample data?
+
+Run **`supabase/migrations/002_zone_city_center_master_data.sql`** in the SQL Editor instead. It makes `city` optional and swaps the old placeholder zones/centers for the Gujarat data. Heads up: it clears the old zones and centers, so preceptors will need to re-pick their center once.
 
 ---
 
@@ -331,7 +341,8 @@ heartfulness-ams/
 ├── public/                 App icons (the teal lotus)
 ├── supabase/
 │   ├── schema.sql          Creates all tables, security rules, booking logic   ← run first
-│   └── seed.sql            Sample zones / centers / areas                       ← run second
+│   ├── seed.sql            Gujarat zones & centers (with their cities)          ← run second
+│   └── migrations/         Changes to apply if your database already exists
 ├── src/
 │   ├── components/         Reusable pieces (buttons, cards, navigation, modals)
 │   ├── context/            Sign-in / sign-out handling

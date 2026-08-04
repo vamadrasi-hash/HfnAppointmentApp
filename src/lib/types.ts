@@ -33,17 +33,10 @@ export interface Center {
   id: string
   zone_id: string
   name: string
-  city: string
+  // Centers are grouped by city in the "City / Center" picker. Not every
+  // center in the master list has a city yet, so this can be null.
+  city: string | null
   address: string | null
-  latitude: number | null
-  longitude: number | null
-}
-
-export interface Area {
-  id: string
-  center_id: string
-  name: string
-  pincode: string | null
   latitude: number | null
   longitude: number | null
 }
@@ -54,9 +47,10 @@ export interface Profile {
   email: string | null
   phone: string | null
   role: UserRole
+  // Where this person belongs: a zone and a center. The center's city is
+  // copied onto the profile so it can be shown without another lookup.
   zone_id: string | null
   center_id: string | null
-  area_id: string | null
   city: string | null
   home_latitude: number | null
   home_longitude: number | null
