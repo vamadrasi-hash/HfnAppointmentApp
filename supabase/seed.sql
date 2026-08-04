@@ -193,3 +193,11 @@ join zones z on z.name = c.zone_name;
 -- select z.name as zone, count(*) as centers, count(distinct c.city) as cities
 -- from zones z left join centers c on c.zone_id = z.id
 -- group by z.name, z.sort_order order by z.sort_order;
+
+-- ---------------- HEARTSPOTS ----------------
+-- Every center starts with one heartspot named after it, so a preceptor
+-- always has something to pick when they say where a sitting happens.
+-- Admins rename these and add the rest (Master data -> a center -> Heartspots).
+insert into heartspots (center_id, name)
+select c.id, c.name from centers c
+on conflict do nothing;

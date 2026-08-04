@@ -34,7 +34,9 @@ export function Modal({
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal="true">
       <div className="absolute inset-0 bg-ink-900/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-md animate-fade-up rounded-t-2xl border border-brand-100 bg-white p-5 shadow-lift sm:rounded-2xl">
+      {/* Tall content (the map picker, a long form) scrolls inside the sheet
+          rather than pushing its buttons off the screen. */}
+      <div className="relative z-10 max-h-[92vh] w-full max-w-md animate-fade-up overflow-y-auto rounded-t-2xl border border-brand-100 bg-white p-5 shadow-lift sm:max-h-[88vh] sm:rounded-2xl">
         <div className="mb-3 flex items-start justify-between">
           {title && <h3 className="font-serif text-xl text-ink-900">{title}</h3>}
           <button

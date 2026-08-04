@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { CalendarX2, MapPin, Search, Check, X, Clock } from 'lucide-react'
+import { CalendarX2, Search, Check, X, Clock } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { getMyBookings, cancelBooking, acceptAlternate, rejectAlternate } from '../lib/api'
 import type { BookingDetail } from '../lib/types'
 import { Badge, Button, Card, EmptyState, PageLoader, SectionTitle } from '../components/ui'
 import { Modal } from '../components/Modal'
+import { PlaceLine } from '../components/PlaceLine'
 import {
   formatTimeRange,
   formatTime,
@@ -31,6 +32,11 @@ function BookingRow({
   const canCancel = b.status === 'requested' || b.status === 'confirmed' || b.status === 'reminded'
   const isAlternate = b.status === 'alternate_proposed'
   const reason = b.decline_reason || b.cancel_reason
+  // Still ahead of them, so it is worth saying where to go — or, for a
+  // home sitting not yet confirmed, that the address is still to come.
+  const showWhereToGo =
+    ['requested', 'confirmed', 'reminded', 'alternate_proposed'].includes(b.status) &&
+    !isPastDate(b.booking_date)
 
   return (
     <Card>
@@ -39,13 +45,7 @@ function BookingRow({
           <p className="truncate font-semibold text-ink-900">
             {b.preceptor?.full_name ?? 'Preceptor'}
           </p>
-          {b.center && (
-            <p className="mt-0.5 inline-flex items-center gap-1 text-sm text-ink-500">
-              <MapPin className="h-3.5 w-3.5" />
-              {b.center.name}
-              {b.center.city ? `, ${b.center.city}` : ''}
-            </p>
-          )}
+          <PlaceLine place={b.place} showAddress={showWhereToGo} className="mt-0.5" />
         </div>
         <Badge tone={statusTone(b.status)}>{statusLabel(b.status)}</Badge>
       </div>

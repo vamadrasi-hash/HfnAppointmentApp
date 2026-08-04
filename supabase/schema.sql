@@ -6,13 +6,16 @@
 
 -- ---- Clean slate (so you can re-run during setup) -------------------
 drop table if exists bookings cascade;
+drop table if exists slot_places cascade;
 drop table if exists availability_slots cascade;
 drop table if exists profiles cascade;
 drop table if exists areas cascade;
+drop table if exists heartspots cascade;
 drop table if exists centers cascade;
 drop table if exists zones cascade;
 drop type if exists user_role cascade;
 drop type if exists booking_status cascade;
+drop type if exists sitting_place cascade;
 
 create extension if not exists "uuid-ossp";
 
@@ -33,6 +36,8 @@ create type booking_status as enum (
   'no_show',
   'expired'
 );
+-- Where a sitting happens: a center's heartspot, or the preceptor's home.
+create type sitting_place as enum ('heartspot', 'home');
 
 -- =====================================================================
 -- MASTER DATA: Zone -> Center (grouped by city)
@@ -56,8 +61,33 @@ create table centers (
   address     text,
   latitude    double precision,                -- for "near me" search
   longitude   double precision,
+  map_url     text,                            -- a Google Maps link
   created_at  timestamptz default now()
 );
+
+-- =====================================================================
+-- HEARTSPOTS — the meditation places that belong to a center.
+-- A center can have several; a preceptor picks one when they say where a
+-- sitting happens. Admins maintain this list.
+-- =====================================================================
+create table heartspots (
+  id          uuid primary key default uuid_generate_v4(),
+  center_id   uuid not null references centers(id) on delete cascade,
+  name        text not null,                   -- e.g. 'Adajan Heartspot'
+  address     text,
+  latitude    double precision,
+  longitude   double precision,
+  map_url     text,
+  is_active   boolean not null default true,
+  created_at  timestamptz default now(),
+  updated_at  timestamptz default now()
+);
+
+create index idx_heartspots_center on heartspots(center_id);
+
+-- Two heartspots in one center cannot share a name (case-insensitively).
+create unique index uniq_heartspot_name_per_center
+  on heartspots (center_id, lower(name));
 
 -- Areas are not used by the app (it asks only for a zone and a city/center).
 -- The table is kept so existing data and the profiles.area_id column stay valid.
@@ -107,13 +137,20 @@ create index idx_profiles_role on profiles(role);
 create table availability_slots (
   id            uuid primary key default uuid_generate_v4(),
   preceptor_id  uuid not null references profiles(id) on delete cascade,
-  center_id     uuid references centers(id) on delete set null,  -- where the sitting happens
+  center_id     uuid references centers(id) on delete set null,  -- which center this is filed under
   day_of_week   int not null check (day_of_week between 0 and 6),
   start_time    time not null,
   end_time      time not null,
+  -- How many abhyasis can join this sitting.
   capacity      int not null default 1 check (capacity > 0),
   is_active     boolean not null default true,
   note          text,
+  -- ---- where the sitting happens ----
+  -- A heartspot sitting inherits its address from the heartspot (and that
+  -- one from its center). A home sitting keeps its address in the private
+  -- `slot_places` table below.
+  place_type    sitting_place not null default 'heartspot',
+  heartspot_id  uuid references heartspots(id) on delete set null,
   created_at    timestamptz default now(),
   constraint chk_time_order check (end_time > start_time)
 );
@@ -121,6 +158,66 @@ create table availability_slots (
 create index idx_slots_preceptor on availability_slots(preceptor_id);
 create index idx_slots_day on availability_slots(day_of_week);
 create index idx_slots_center on availability_slots(center_id);
+create index idx_slots_heartspot on availability_slots(heartspot_id);
+
+-- =====================================================================
+-- SLOT PLACES — a preceptor's home address, kept apart on purpose.
+--
+-- Every signed-in user can read `availability_slots` — they have to, it
+-- is how anyone finds an open time. Row level security is row-level, so
+-- an address stored there would be readable by all of them. Holding it
+-- in its own table is what makes "only after the sitting is confirmed"
+-- enforceable rather than merely displayed.
+-- =====================================================================
+create table slot_places (
+  slot_id    uuid primary key references availability_slots(id) on delete cascade,
+  address    text not null,
+  latitude   double precision,
+  longitude  double precision,
+  map_url    text,
+  updated_at timestamptz default now()
+);
+
+-- Keep the two halves of "where" consistent: a home sitting has no
+-- heartspot, and a heartspot must belong to the center the slot is filed
+-- under (the center fills itself in when only the heartspot was chosen).
+create or replace function normalize_slot_place()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  hs_center uuid;
+begin
+  if new.place_type = 'home' then
+    new.heartspot_id := null;
+  else
+    if tg_op = 'UPDATE' then
+      -- No longer a home sitting: the private address has nothing left to
+      -- describe, so it goes with it.
+      delete from slot_places where slot_id = new.id;
+    end if;
+    if new.heartspot_id is not null then
+      select center_id into hs_center from heartspots where id = new.heartspot_id;
+      if hs_center is null then
+        raise exception 'That heartspot no longer exists.';
+      end if;
+      if new.center_id is null then
+        new.center_id := hs_center;
+      elsif new.center_id <> hs_center then
+        raise exception 'The chosen heartspot does not belong to the chosen center.';
+      end if;
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_normalize_slot_place
+  before insert or update on availability_slots
+  for each row execute function normalize_slot_place();
 
 -- =====================================================================
 -- BOOKINGS — an abhyasi reserves a place in a slot for one real date
@@ -301,9 +398,11 @@ create trigger trg_booking_status_change
 -- =====================================================================
 alter table zones               enable row level security;
 alter table centers             enable row level security;
+alter table heartspots          enable row level security;
 alter table areas               enable row level security;
 alter table profiles            enable row level security;
 alter table availability_slots  enable row level security;
+alter table slot_places         enable row level security;
 alter table bookings            enable row level security;
 
 -- Helper: is the current user an admin? (security definer bypasses RLS,
@@ -359,10 +458,12 @@ create trigger trg_guard_profile_role
 create policy "master read zones"   on zones   for select to authenticated using (true);
 create policy "master read centers" on centers for select to authenticated using (true);
 create policy "master read areas"   on areas   for select to authenticated using (true);
+create policy "master read heartspots" on heartspots for select to authenticated using (true);
 
 create policy "admin write zones"   on zones   for all to authenticated using (is_admin()) with check (is_admin());
 create policy "admin write centers" on centers for all to authenticated using (is_admin()) with check (is_admin());
 create policy "admin write areas"   on areas   for all to authenticated using (is_admin()) with check (is_admin());
+create policy "admin write heartspots" on heartspots for all to authenticated using (is_admin()) with check (is_admin());
 
 -- ---- Profiles -------------------------------------------------------
 -- Signed-in users can see profiles (needed to show preceptor & abhyasi names).
@@ -387,6 +488,37 @@ create policy "preceptor manage own slots" on availability_slots
   for all to authenticated
   using (preceptor_id = auth.uid() or is_admin())
   with check (preceptor_id = auth.uid() or is_admin());
+
+-- ---- Slot places (a preceptor's home address) -----------------------
+-- The preceptor (or an admin) owns it outright.
+create policy "preceptor manages own slot place" on slot_places
+  for all to authenticated
+  using (
+    exists (
+      select 1 from availability_slots s
+      where s.id = slot_places.slot_id and (s.preceptor_id = auth.uid() or is_admin())
+    )
+  )
+  with check (
+    exists (
+      select 1 from availability_slots s
+      where s.id = slot_places.slot_id and (s.preceptor_id = auth.uid() or is_admin())
+    )
+  );
+
+-- An abhyasi sees it only once the sitting is actually on. 'requested' is
+-- deliberately absent: asking is not the same as being invited. The
+-- finished states stay readable so a past sitting still reads sensibly.
+create policy "slot place readable once confirmed" on slot_places
+  for select to authenticated
+  using (
+    exists (
+      select 1 from bookings b
+      where b.slot_id = slot_places.slot_id
+        and b.abhyasi_id = auth.uid()
+        and b.status in ('confirmed', 'reminded', 'completed', 'no_show')
+    )
+  );
 
 -- ---- Bookings -------------------------------------------------------
 -- Visible to: the booker, the preceptor who owns the slot, or an admin.
@@ -450,7 +582,18 @@ returns table (
   end_time           time,
   capacity           int,
   note               text,
-  booked_count       bigint
+  booked_count       bigint,
+  -- Where the sitting happens. For a home sitting this is deliberately
+  -- vague: no address, no link, and coordinates rounded to ~1 km. The
+  -- real address comes from `slot_places`, once there is a confirmed
+  -- booking to justify it.
+  place_type         text,
+  heartspot_id       uuid,
+  heartspot_name     text,
+  place_address      text,
+  place_lat          double precision,
+  place_lng          double precision,
+  place_map_url      text
 )
 language sql
 security definer
@@ -460,10 +603,27 @@ as $$
     s.id, p.id, p.full_name, p.phone, p.area_id,
     c.id, c.name, c.city, c.zone_id, c.latitude, c.longitude,
     s.day_of_week, s.start_time, s.end_time, s.capacity, s.note,
-    coalesce(b.cnt, 0) as booked_count
+    coalesce(b.cnt, 0) as booked_count,
+    s.place_type::text,
+    h.id, h.name,
+    -- A heartspot's own details win; otherwise the center's.
+    case when s.place_type = 'home' then null
+         else coalesce(h.address, c.address) end,
+    -- Two decimal places is about 1.1 km — enough to sort by distance,
+    -- not enough to point at a house.
+    case when s.place_type = 'home'
+           then round(sp.latitude::numeric, 2)::double precision
+         else coalesce(h.latitude, c.latitude) end,
+    case when s.place_type = 'home'
+           then round(sp.longitude::numeric, 2)::double precision
+         else coalesce(h.longitude, c.longitude) end,
+    case when s.place_type = 'home' then null
+         else coalesce(h.map_url, c.map_url) end
   from availability_slots s
   join profiles p on p.id = s.preceptor_id
   left join centers c on c.id = s.center_id
+  left join heartspots h on h.id = s.heartspot_id
+  left join slot_places sp on sp.slot_id = s.id
   left join (
     select slot_id, count(*) as cnt
     from bookings
@@ -489,6 +649,7 @@ grant execute on function find_available_slots(date) to authenticated;
 alter function public.set_booking_defaults()     set search_path = public, pg_temp;
 alter function public.on_booking_status_change() set search_path = public, pg_temp;
 alter function public.find_available_slots(date) set search_path = public, pg_temp;
+-- normalize_slot_place() already fixes its own search_path at creation.
 
 -- Trigger functions only ever run from a trigger, so nobody needs EXECUTE
 -- on them — and without it they stop being REST endpoints. Postgres checks
@@ -497,6 +658,7 @@ revoke execute on function public.check_slot_capacity()      from public, anon, 
 revoke execute on function public.set_booking_defaults()     from public, anon, authenticated;
 revoke execute on function public.on_booking_status_change() from public, anon, authenticated;
 revoke execute on function public.guard_profile_role()       from public, anon, authenticated;
+revoke execute on function public.normalize_slot_place()     from public, anon, authenticated;
 
 -- is_admin() is evaluated inside the RLS policies as the calling user, so
 -- signed-in users must keep EXECUTE. Signed-out ones never reach a policy

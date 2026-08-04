@@ -1,19 +1,30 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, Pencil, Trash2, Clock, Users, Info, CalendarPlus } from 'lucide-react'
+import { Plus, Pencil, Trash2, Clock, Users, Info, CalendarPlus, Home, MapPin } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { getMySlots, createSlot, updateSlot, deleteSlot } from '../lib/api'
-import type { AvailabilitySlot, Center } from '../lib/types'
+import { getMySlots, createSlot, updateSlot, deleteSlot, saveSlotPlace } from '../lib/api'
+import type { AvailabilitySlot, Center, Heartspot, SittingPlaceType } from '../lib/types'
 import {
   centerFullLabel,
   centerGroup,
   compareCenters,
+  findHeartspot,
+  heartspotsInCenter,
   loadMasterData,
 } from '../lib/masterData'
+import { MY_HOME_PLACE_NAME, resolvePlace } from '../lib/place'
+import { hasLocation } from '../lib/geo'
 import { Badge, Button, Card, EmptyState, Field, Input, PageLoader, Select } from '../components/ui'
 import { Combobox, type ComboOption } from '../components/Combobox'
 import { Modal } from '../components/Modal'
-import { WEEK_DAYS, dayLabel, formatTimeRange, formatTime } from '../lib/utils'
+import { PlaceLine } from '../components/PlaceLine'
+import {
+  LocationPicker,
+  emptyPlaceValue,
+  toPlaceValue,
+  type PlaceValue,
+} from '../components/LocationPicker'
+import { WEEK_DAYS, dayLabel, formatTimeRange, formatTime, cx } from '../lib/utils'
 
 interface FormState {
   day_of_week: number
@@ -21,6 +32,10 @@ interface FormState {
   end_time: string
   capacity: number
   center_id: string
+  // Where the sitting happens.
+  place_type: SittingPlaceType
+  heartspot_id: string
+  home: PlaceValue
   note: string
   is_active: boolean
 }
@@ -31,6 +46,9 @@ const emptyForm = (centerId: string): FormState => ({
   end_time: '08:00',
   capacity: 1,
   center_id: centerId,
+  place_type: 'heartspot',
+  heartspot_id: '',
+  home: emptyPlaceValue(),
   note: '',
   is_active: true,
 })
@@ -44,6 +62,7 @@ export default function Availability() {
 
   const [slots, setSlots] = useState<AvailabilitySlot[]>([])
   const [centers, setCenters] = useState<Center[]>([])
+  const [heartspots, setHeartspots] = useState<Heartspot[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -64,6 +83,7 @@ export default function Availability() {
       const [mySlots, master] = await Promise.all([getMySlots(user.id), loadMasterData()])
       setSlots(mySlots)
       setCenters(master.centers)
+      setHeartspots(master.heartspots)
     } catch (e: any) {
       setError(e.message ?? 'Could not load your schedule.')
     } finally {
@@ -89,6 +109,24 @@ export default function Availability() {
     [centers],
   )
 
+  // Only the chosen center's heartspots — that is what "centerwise" means.
+  const centerHeartspots = useMemo(
+    () => heartspotsInCenter(heartspots, form.center_id).filter((h) => h.is_active),
+    [heartspots, form.center_id],
+  )
+
+  const heartspotOptions = useMemo<ComboOption[]>(
+    () =>
+      centerHeartspots.map((h) => ({
+        value: h.id,
+        label: h.name,
+        keywords: h.address ?? '',
+      })),
+    [centerHeartspots],
+  )
+
+  const chosenHeartspot = findHeartspot(heartspots, form.heartspot_id)
+
   function openAdd() {
     setEditing(null)
     setForm(emptyForm(profile?.center_id ?? centers[0]?.id ?? ''))
@@ -104,11 +142,26 @@ export default function Availability() {
       end_time: s.end_time.slice(0, 5),
       capacity: s.capacity,
       center_id: s.center_id ?? '',
+      place_type: s.place_type,
+      heartspot_id: s.heartspot_id ?? '',
+      home:
+        s.place_type === 'home' && s.place_details
+          ? toPlaceValue(s.place_details)
+          : emptyPlaceValue(),
       note: s.note ?? '',
       is_active: s.is_active,
     })
     setFormError(null)
     setOpen(true)
+  }
+
+  // Changing the center invalidates a heartspot from the old one.
+  function pickCenter(centerId: string) {
+    setForm((f) => {
+      const keep =
+        f.heartspot_id && heartspots.some((h) => h.id === f.heartspot_id && h.center_id === centerId)
+      return { ...f, center_id: centerId, heartspot_id: keep ? f.heartspot_id : '' }
+    })
   }
 
   async function save() {
@@ -119,33 +172,49 @@ export default function Availability() {
       return
     }
     if (form.capacity < 1) {
-      setFormError('Capacity must be at least 1.')
+      setFormError('At least one person has to be able to join.')
       return
     }
+    if (!form.center_id) {
+      setFormError('Pick the city / center this sitting belongs to.')
+      return
+    }
+    if (form.place_type === 'heartspot' && centerHeartspots.length > 0 && !form.heartspot_id) {
+      setFormError('Pick which heartspot the sitting happens at.')
+      return
+    }
+    if (form.place_type === 'home' && !form.home.address.trim()) {
+      setFormError('Add the address abhyasis should come to.')
+      return
+    }
+
+    const isHome = form.place_type === 'home'
+    const payload = {
+      day_of_week: form.day_of_week,
+      start_time: withSeconds(form.start_time),
+      end_time: withSeconds(form.end_time),
+      capacity: form.capacity,
+      center_id: form.center_id || null,
+      place_type: form.place_type,
+      // A heartspot sitting inherits its address from the heartspot, so it
+      // stores nothing of its own.
+      heartspot_id: isHome ? null : form.heartspot_id || null,
+      note: form.note.trim() || null,
+      is_active: form.is_active,
+    }
+
     setSaving(true)
     try {
-      if (editing) {
-        await updateSlot(editing.id, {
-          day_of_week: form.day_of_week,
-          start_time: withSeconds(form.start_time),
-          end_time: withSeconds(form.end_time),
-          capacity: form.capacity,
-          center_id: form.center_id || null,
-          note: form.note.trim() || null,
-          is_active: form.is_active,
-        })
-      } else {
-        await createSlot({
-          preceptor_id: user.id,
-          day_of_week: form.day_of_week,
-          start_time: withSeconds(form.start_time),
-          end_time: withSeconds(form.end_time),
-          capacity: form.capacity,
-          center_id: form.center_id || null,
-          note: form.note.trim() || null,
-          is_active: form.is_active,
-        })
-      }
+      const slotId = editing
+        ? (await updateSlot(editing.id, payload), editing.id)
+        : (await createSlot({ preceptor_id: user.id, ...payload })).id
+
+      // The home address lives in its own table, so that only this
+      // preceptor and a confirmed abhyasi can read it. Switching away from
+      // a home sitting clears it — the database does that too, so the
+      // address never outlives the reason for holding it.
+      await saveSlotPlace(slotId, isHome ? form.home : null)
+
       setOpen(false)
       await load()
     } catch (e: any) {
@@ -204,7 +273,7 @@ export default function Availability() {
         <div>
           <h1 className="font-serif text-2xl text-ink-900">My schedule</h1>
           <p className="mt-1 text-sm text-ink-500">
-            Set the weekly times you can give individual sittings.
+            Set the weekly times you can give individual sittings, and where they happen.
           </p>
         </div>
         <Button onClick={openAdd} className="shrink-0">
@@ -236,9 +305,12 @@ export default function Availability() {
               <p className="mb-2 text-sm font-semibold text-ink-700">{day.label}</p>
               <div className="space-y-2">
                 {daySlots.map((s) => {
-                  const center = centers.find((c) => c.id === s.center_id)
+                  const center = centers.find((c) => c.id === s.center_id) ?? null
+                  const place = resolvePlace(s, findHeartspot(heartspots, s.heartspot_id), center, {
+                    homeName: MY_HOME_PLACE_NAME,
+                  })
                   return (
-                    <Card key={s.id} className="flex items-center justify-between gap-3">
+                    <Card key={s.id} className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <Clock className="h-4 w-4 shrink-0 text-brand-500" />
@@ -247,13 +319,16 @@ export default function Availability() {
                           </span>
                           {!s.is_active && <Badge tone="neutral">Paused</Badge>}
                         </div>
-                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-500">
-                          <span className="inline-flex items-center gap-1">
-                            <Users className="h-3.5 w-3.5" />
-                            {s.capacity} {s.capacity > 1 ? 'places' : 'place'}
-                          </span>
-                          {center && <span>{centerFullLabel(center)}</span>}
-                        </div>
+                        <p className="mt-1 inline-flex items-center gap-1 text-sm text-ink-500">
+                          <Users className="h-3.5 w-3.5" />
+                          {s.capacity} {s.capacity === 1 ? 'person' : 'people'} can join
+                        </p>
+                        <PlaceLine place={place} className="mt-1" />
+                        {!hasLocation(place) && (
+                          <p className="mt-1 text-xs text-amber-700">
+                            No address or map location yet — abhyasis won’t get directions.
+                          </p>
+                        )}
                         {s.note && <p className="mt-1 text-xs text-ink-400">{s.note}</p>}
                       </div>
                       <div className="flex shrink-0 items-center gap-1">
@@ -328,7 +403,10 @@ export default function Availability() {
             </Field>
           </div>
 
-          <Field label="How many can come?" hint="Number of abhyasis you can take in this slot.">
+          <Field
+            label="How many people can join?"
+            hint="The number of abhyasis who can take this sitting together."
+          >
             <Input
               type="number"
               min={1}
@@ -337,16 +415,100 @@ export default function Availability() {
             />
           </Field>
 
-          <Field label="City / Center" hint="Where this sitting happens. Search by city or center.">
+          <Field
+            label="City / Center"
+            hint="Which center this sitting belongs to. Abhyasis search by this."
+          >
             <Combobox
               value={form.center_id}
               options={centerOptions}
-              onChange={(v) => setForm({ ...form, center_id: v })}
-              placeholder="Not specified"
+              onChange={pickCenter}
+              placeholder="Select a city or center"
               searchPlaceholder="Type a city or center…"
               clearable
             />
           </Field>
+
+          {/* ---- Where the sitting happens ---- */}
+          <div>
+            <p className="mb-1.5 text-sm font-medium text-ink-700">Place of the sitting</p>
+            <div className="grid grid-cols-2 gap-2">
+              <PlaceTypeButton
+                active={form.place_type === 'heartspot'}
+                icon={<MapPin className="h-4 w-4" />}
+                label="Heartspot"
+                onClick={() => setForm({ ...form, place_type: 'heartspot' })}
+              />
+              <PlaceTypeButton
+                active={form.place_type === 'home'}
+                icon={<Home className="h-4 w-4" />}
+                label="My home"
+                onClick={() => setForm({ ...form, place_type: 'home' })}
+              />
+            </div>
+          </div>
+
+          {form.place_type === 'heartspot' ? (
+            <div className="space-y-2">
+              <Field
+                label="Heartspot"
+                hint="The heartspots of the center you picked above."
+              >
+                <Combobox
+                  value={form.heartspot_id}
+                  options={heartspotOptions}
+                  onChange={(v) => setForm({ ...form, heartspot_id: v })}
+                  disabled={!form.center_id}
+                  clearable
+                  placeholder={
+                    !form.center_id
+                      ? 'Pick a city / center first'
+                      : centerHeartspots.length === 0
+                        ? 'No heartspot listed for this center'
+                        : 'Select a heartspot'
+                  }
+                  searchPlaceholder="Type a heartspot name…"
+                  emptyText="No heartspot matches that."
+                />
+              </Field>
+
+              {chosenHeartspot && (
+                <div className="rounded-xl border border-brand-100 bg-brand-50/40 px-3.5 py-2.5 text-sm text-ink-600">
+                  {chosenHeartspot.address ? (
+                    <p>{chosenHeartspot.address}</p>
+                  ) : (
+                    <p className="text-ink-400">No address saved for this heartspot yet.</p>
+                  )}
+                  <p className="mt-1 text-xs text-ink-400">
+                    A heartspot’s address and map location are kept in master data — ask an
+                    administrator to correct them.
+                  </p>
+                </div>
+              )}
+
+              {form.center_id && centerHeartspots.length === 0 && (
+                <p className="rounded-xl border border-amber-100 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-700">
+                  This center has no heartspots listed yet. Ask an administrator to add one, or hold
+                  the sitting at your home.
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <LocationPicker
+                value={form.home}
+                onChange={(home) => setForm({ ...form, home })}
+                addressLabel="Home address"
+                addressHint="Where abhyasis should come. Include a landmark if that helps."
+                addressPlaceholder="Flat / house, society, road, area"
+              />
+              <p className="rounded-xl border border-brand-100 bg-brand-50/60 px-3.5 py-2.5 text-xs text-ink-600">
+                Your address stays private until you confirm a sitting. Until then an abhyasi
+                searching only sees your city and center — never the address, and never a map pin
+                closer than about a kilometre.
+              </p>
+            </div>
+          )}
 
           <Field label="Note" hint="Optional — e.g. ‘Only for new practitioners’.">
             <Input
@@ -406,5 +568,34 @@ export default function Availability() {
         )}
       </Modal>
     </div>
+  )
+}
+
+function PlaceTypeButton({
+  active,
+  icon,
+  label,
+  onClick,
+}: {
+  active: boolean
+  icon: React.ReactNode
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cx(
+        'inline-flex items-center justify-center gap-2 rounded-xl border px-3.5 py-2.5 text-sm font-medium transition-colors',
+        active
+          ? 'border-brand-500 bg-brand-600 text-white shadow-soft'
+          : 'border-brand-200 bg-white text-ink-600 hover:border-brand-400',
+      )}
+    >
+      {icon}
+      {label}
+    </button>
   )
 }

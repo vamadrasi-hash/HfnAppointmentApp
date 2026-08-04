@@ -1,20 +1,26 @@
-// Zones and centers change rarely, so the whole list (5 zones, ~140 centers)
-// is fetched once per session and shared by every screen that needs it.
-import { useEffect, useState } from 'react'
-import { getZones, getCenters } from './api'
-import type { Center, Zone } from './types'
+// Zones, centers and their heartspots change rarely, so the whole lot
+// (5 zones, ~140 centers) is fetched once per session and shared by every
+// screen that needs it. The admin master-data screen edits it, so it can
+// also be invalidated — every hook re-reads when that happens.
+import { useCallback, useEffect, useState } from 'react'
+import { getZones, getCenters, getHeartspots } from './api'
+import type { Center, Heartspot, Zone } from './types'
 
 export interface MasterData {
   zones: Zone[]
   centers: Center[]
+  heartspots: Heartspot[]
 }
 
+const EMPTY: MasterData = { zones: [], centers: [], heartspots: [] }
+
 let cache: Promise<MasterData> | null = null
+const listeners = new Set<() => void>()
 
 export function loadMasterData(): Promise<MasterData> {
   if (!cache) {
-    cache = Promise.all([getZones(), getCenters()])
-      .then(([zones, centers]) => ({ zones, centers }))
+    cache = Promise.all([getZones(), getCenters(), getHeartspots()])
+      .then(([zones, centers, heartspots]) => ({ zones, centers, heartspots }))
       .catch((e) => {
         cache = null // let the next caller retry
         throw e
@@ -23,13 +29,21 @@ export function loadMasterData(): Promise<MasterData> {
   return cache
 }
 
+/** Throw the cache away and tell every mounted hook to load it again. */
+export function invalidateMasterData(): void {
+  cache = null
+  listeners.forEach((fn) => fn())
+}
+
 export function useMasterData() {
-  const [data, setData] = useState<MasterData>({ zones: [], centers: [] })
+  const [data, setData] = useState<MasterData>(EMPTY)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [nonce, setNonce] = useState(0)
 
   useEffect(() => {
     let alive = true
+    setError(null)
     loadMasterData()
       .then((d) => alive && setData(d))
       .catch((e) => alive && setError(e.message ?? 'Could not load zones and centers.'))
@@ -37,63 +51,56 @@ export function useMasterData() {
     return () => {
       alive = false
     }
+  }, [nonce])
+
+  // Re-read whenever anyone edits the master data.
+  useEffect(() => {
+    const onChange = () => setNonce((n) => n + 1)
+    listeners.add(onChange)
+    return () => {
+      listeners.delete(onChange)
+    }
   }, [])
 
-  return { ...data, loading, error }
+  const reload = useCallback(() => invalidateMasterData(), [])
+
+  return { ...data, loading, error, reload }
 }
 
 // ------------------------------------------------------------------
-// Labels
+// Heartspots
 // ------------------------------------------------------------------
 
-// Centers whose city is not known yet are still listed — they collect here.
-export const NO_CITY_GROUP = 'Other centers'
-
-export function centerCity(c: Pick<Center, 'city'>): string | null {
-  const city = c.city?.trim()
-  return city ? city : null
+/** A center's heartspots, active ones first, A–Z. */
+export function heartspotsInCenter(heartspots: Heartspot[], centerId: string): Heartspot[] {
+  if (!centerId) return []
+  return heartspots
+    .filter((h) => h.center_id === centerId)
+    .sort(
+      (a, b) =>
+        Number(b.is_active) - Number(a.is_active) ||
+        a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
+    )
 }
 
-export function centerGroup(c: Pick<Center, 'city'>): string {
-  return centerCity(c) ?? NO_CITY_GROUP
-}
-
-// A center reads best as "City · Center". When the center *is* its city
-// (MEHSANA in Mehsana) the two collapse into one.
-export function centerFullLabel(c: Pick<Center, 'name' | 'city'>): string {
-  const city = centerCity(c)
-  if (!city) return c.name
-  if (city.toLowerCase() === c.name.trim().toLowerCase()) return c.name
-  return `${city} · ${c.name}`
+export function findHeartspot(
+  heartspots: Heartspot[],
+  id: string | null | undefined,
+): Heartspot | null {
+  if (!id) return null
+  return heartspots.find((h) => h.id === id) ?? null
 }
 
 // ------------------------------------------------------------------
-// Sorting / lookup
+// Labels and ordering live in ./centers — re-exported here because
+// most screens reach for them through this module.
 // ------------------------------------------------------------------
-
-// City groups A–Z, with the "no city yet" bucket last; centers A–Z inside.
-export function compareCenters(a: Center, b: Center): number {
-  const ga = centerCity(a)
-  const gb = centerCity(b)
-  if (ga == null && gb != null) return 1
-  if (ga != null && gb == null) return -1
-  if (ga != null && gb != null) {
-    const byCity = ga.localeCompare(gb, undefined, { sensitivity: 'base' })
-    if (byCity !== 0) return byCity
-  }
-  return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-}
-
-export function centersInZone(centers: Center[], zoneId: string): Center[] {
-  const list = zoneId ? centers.filter((c) => c.zone_id === zoneId) : centers
-  return [...list].sort(compareCenters)
-}
-
-export function countCities(centers: Center[]): number {
-  const set = new Set<string>()
-  for (const c of centers) {
-    const city = centerCity(c)
-    if (city) set.add(city.toLowerCase())
-  }
-  return set.size
-}
+export {
+  NO_CITY_GROUP,
+  centerCity,
+  centerGroup,
+  centerFullLabel,
+  compareCenters,
+  centersInZone,
+  countCities,
+} from './centers'

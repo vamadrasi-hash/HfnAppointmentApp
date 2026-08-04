@@ -1,6 +1,7 @@
 import { MapPin, Navigation, Clock } from 'lucide-react'
 import type { AvailableSlot, PreceptorWithSlots } from '../lib/types'
 import { Avatar, Badge, Card } from './ui'
+import { PlaceLine } from './PlaceLine'
 import { formatTimeRange, cx } from '../lib/utils'
 
 export function PreceptorCard({
@@ -10,7 +11,7 @@ export function PreceptorCard({
   data: PreceptorWithSlots
   onBook: (slot: AvailableSlot) => void
 }) {
-  const { preceptor, center, distanceKm, slots } = data
+  const { preceptor, center, distanceKm, distanceApprox, slots } = data
 
   return (
     <Card>
@@ -27,9 +28,16 @@ export function PreceptorCard({
               </span>
             )}
             {distanceKm != null && (
-              <span className="inline-flex items-center gap-1 text-brand-600">
+              <span
+                className="inline-flex items-center gap-1 text-brand-600"
+                // A home sitting is placed to the nearest kilometre or so,
+                // so its distance is rounded rather than precise.
+                title={distanceApprox ? 'Approximate — a home address is kept private' : undefined}
+              >
                 <Navigation className="h-3.5 w-3.5" />
-                {distanceKm < 1 ? '<1' : distanceKm.toFixed(1)} km
+                {distanceApprox
+                  ? `~${Math.max(1, Math.round(distanceKm))} km`
+                  : `${distanceKm < 1 ? '<1' : distanceKm.toFixed(1)} km`}
               </span>
             )}
           </div>
@@ -55,11 +63,14 @@ export function PreceptorCard({
                   : 'border-brand-200 bg-brand-50/40 hover:border-brand-400 hover:bg-brand-50',
               )}
             >
-              <span className="flex flex-col">
+              <span className="flex min-w-0 flex-col">
                 <span className={cx('text-sm font-semibold', full ? 'text-ink-400' : 'text-ink-900')}>
                   {formatTimeRange(slot.start_time, slot.end_time)}
                 </span>
-                {slot.note && <span className="text-xs text-ink-400">{slot.note}</span>}
+                {/* Where this particular sitting happens — a preceptor can
+                    hold one at a heartspot and another at home. */}
+                <PlaceLine place={slot.place} className="mt-0.5 text-xs" />
+                {slot.note && <span className="mt-0.5 text-xs text-ink-400">{slot.note}</span>}
               </span>
               {full ? (
                 <Badge tone="neutral">Full</Badge>
