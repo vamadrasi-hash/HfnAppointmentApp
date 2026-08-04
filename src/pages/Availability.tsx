@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Plus, Pencil, Trash2, Clock, Users, Info, CalendarPlus, Home, MapPin } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { getMySlots, createSlot, updateSlot, deleteSlot } from '../lib/api'
+import { getMySlots, createSlot, updateSlot, deleteSlot, saveSlotPlace } from '../lib/api'
 import type { AvailabilitySlot, Center, Heartspot, SittingPlaceType } from '../lib/types'
 import {
   centerFullLabel,
@@ -144,7 +144,10 @@ export default function Availability() {
       center_id: s.center_id ?? '',
       place_type: s.place_type,
       heartspot_id: s.heartspot_id ?? '',
-      home: s.place_type === 'home' ? toPlaceValue(s) : emptyPlaceValue(),
+      home:
+        s.place_type === 'home' && s.place_details
+          ? toPlaceValue(s.place_details)
+          : emptyPlaceValue(),
       note: s.note ?? '',
       is_active: s.is_active,
     })
@@ -193,24 +196,25 @@ export default function Availability() {
       capacity: form.capacity,
       center_id: form.center_id || null,
       place_type: form.place_type,
-      // The heartspot carries its own address, so a heartspot sitting
+      // A heartspot sitting inherits its address from the heartspot, so it
       // stores nothing of its own.
       heartspot_id: isHome ? null : form.heartspot_id || null,
-      address: isHome ? form.home.address.trim() : null,
-      latitude: isHome ? form.home.latitude : null,
-      longitude: isHome ? form.home.longitude : null,
-      map_url: isHome ? form.home.map_url : null,
       note: form.note.trim() || null,
       is_active: form.is_active,
     }
 
     setSaving(true)
     try {
-      if (editing) {
-        await updateSlot(editing.id, payload)
-      } else {
-        await createSlot({ preceptor_id: user.id, ...payload })
-      }
+      const slotId = editing
+        ? (await updateSlot(editing.id, payload), editing.id)
+        : (await createSlot({ preceptor_id: user.id, ...payload })).id
+
+      // The home address lives in its own table, so that only this
+      // preceptor and a confirmed abhyasi can read it. Switching away from
+      // a home sitting clears it — the database does that too, so the
+      // address never outlives the reason for holding it.
+      await saveSlotPlace(slotId, isHome ? form.home : null)
+
       setOpen(false)
       await load()
     } catch (e: any) {
@@ -498,9 +502,10 @@ export default function Availability() {
                 addressHint="Where abhyasis should come. Include a landmark if that helps."
                 addressPlaceholder="Flat / house, society, road, area"
               />
-              <p className="rounded-xl border border-amber-100 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-700">
-                This address is shown to signed-in abhyasis who find this sitting. Keep it to what
-                you are comfortable sharing.
+              <p className="rounded-xl border border-brand-100 bg-brand-50/60 px-3.5 py-2.5 text-xs text-ink-600">
+                Your address stays private until you confirm a sitting. Until then an abhyasi
+                searching only sees your city and center — never the address, and never a map pin
+                closer than about a kilometre.
               </p>
             </div>
           )}

@@ -1,4 +1,4 @@
-import { Home, MapPin, Navigation } from 'lucide-react'
+import { Home, Lock, MapPin, Navigation } from 'lucide-react'
 import type { ResolvedPlace } from '../lib/types'
 import { directionsUrl } from '../lib/geo'
 import { cx } from '../lib/utils'
@@ -20,7 +20,9 @@ export function PlaceLine({
 }) {
   if (!place) return null
   const Icon = place.type === 'home' ? Home : MapPin
-  const directions = directionsUrl(place)
+  // A restricted place may still carry a coarse coordinate for distance
+  // sorting — never enough to navigate to, so no link.
+  const directions = place.restricted ? null : directionsUrl(place)
 
   return (
     <div className={cx('min-w-0 text-sm text-ink-500', className)}>
@@ -32,8 +34,15 @@ export function PlaceLine({
         <span className="ml-1 text-ink-400">· {place.area}</span>
       )}
 
-      {showAddress && place.address && (
+      {showAddress && place.address && !place.restricted && (
         <p className="mt-0.5 text-ink-500">{place.address}</p>
+      )}
+
+      {showAddress && place.restricted && (
+        <p className="mt-1 inline-flex items-start gap-1.5 rounded-lg bg-brand-50/70 px-2.5 py-1.5 text-xs text-ink-500">
+          <Lock className="mt-0.5 h-3 w-3 shrink-0 text-brand-500" />
+          The preceptor shares the address once they confirm your sitting.
+        </p>
       )}
 
       {showAddress && directions && (

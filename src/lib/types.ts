@@ -97,11 +97,13 @@ export interface AvailabilitySlot {
   // ---- where the sitting happens ----
   place_type: SittingPlaceType
   heartspot_id: string | null
-  // Filled in for a home sitting; also an override for a heartspot one.
-  address: string | null
-  latitude: number | null
-  longitude: number | null
-  map_url: string | null
+  /**
+   * A home sitting's address, from the private `slot_places` table. Null
+   * unless the viewer is allowed to see it: the preceptor, an admin, or an
+   * abhyasi whose booking on this slot is confirmed. A heartspot sitting
+   * never has one — it inherits from the heartspot, and that from its center.
+   */
+  place_details?: PlaceDetails | null
 }
 
 export interface Booking {
@@ -136,15 +138,18 @@ export interface ResolvedPlace extends PlaceDetails {
   name: string
   /** The center it is filed under, e.g. 'Surat · Surat-West-Adajan'. */
   area: string | null
+  /**
+   * A home sitting whose address this viewer may not see yet — it is
+   * shared once the preceptor confirms. (Also true, harmlessly, when the
+   * preceptor simply has not filled one in.)
+   */
+  restricted: boolean
 }
 
 // The raw place columns are left out: the RPC returns them already
 // resolved, as `place`.
 export interface AvailableSlot
-  extends Omit<
-    AvailabilitySlot,
-    'heartspot_id' | 'address' | 'latitude' | 'longitude' | 'map_url'
-  > {
+  extends Omit<AvailabilitySlot, 'heartspot_id' | 'place_details'> {
   preceptor: Pick<Profile, 'id' | 'full_name' | 'phone'>
   center: Pick<Center, 'id' | 'name' | 'city' | 'latitude' | 'longitude'> | null
   place: ResolvedPlace
@@ -156,6 +161,8 @@ export interface PreceptorWithSlots {
   preceptor: Pick<Profile, 'id' | 'full_name' | 'phone'>
   center: Pick<Center, 'id' | 'name' | 'city'> | null
   distanceKm: number | null
+  /** True when the distance came from a home sitting's coarse location. */
+  distanceApprox: boolean
   slots: AvailableSlot[]
 }
 

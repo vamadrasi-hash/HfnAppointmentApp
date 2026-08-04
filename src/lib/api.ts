@@ -8,6 +8,7 @@ import type {
   AvailableSlot,
   PreceptorWithSlots,
   BookingDetail,
+  PlaceDetails,
   ResolvedPlace,
   SittingPlaceType,
 } from './types'
@@ -129,16 +130,29 @@ export async function upsertProfile(p: Partial<Profile> & { id: string }): Promi
 export async function getMySlots(preceptorId: string): Promise<AvailabilitySlot[]> {
   const { data, error } = await supabase
     .from('availability_slots')
-    .select('*')
+    .select('*, place_details:slot_places ( address, latitude, longitude, map_url )')
     .eq('preceptor_id', preceptorId)
     .order('day_of_week', { ascending: true })
     .order('start_time', { ascending: true })
   if (error) throw error
-  return data ?? []
+  return (data ?? []).map((s: any) => ({ ...s, place_details: onePlace(s.place_details) }))
+}
+
+// PostgREST returns a one-to-one embed as an object, but an unresolved
+// relationship as an array — accept either.
+function onePlace(embedded: any): PlaceDetails | null {
+  const row = Array.isArray(embedded) ? (embedded[0] ?? null) : (embedded ?? null)
+  if (!row) return null
+  return {
+    address: row.address ?? null,
+    latitude: row.latitude ?? null,
+    longitude: row.longitude ?? null,
+    map_url: row.map_url ?? null,
+  }
 }
 
 export async function createSlot(
-  slot: Omit<AvailabilitySlot, 'id'>,
+  slot: Omit<AvailabilitySlot, 'id' | 'place_details'>,
 ): Promise<AvailabilitySlot> {
   const { data, error } = await supabase
     .from('availability_slots')
@@ -147,6 +161,34 @@ export async function createSlot(
     .single()
   if (error) throw error
   return data
+}
+
+/**
+ * A home sitting's address, in the table only the preceptor, an admin and
+ * a confirmed abhyasi can read. Passing null clears it — which is also
+ * what the database does by itself when a slot stops being a home one.
+ */
+export async function saveSlotPlace(
+  slotId: string,
+  place: PlaceDetails | null,
+): Promise<void> {
+  if (!place || !place.address?.trim()) {
+    const { error } = await supabase.from('slot_places').delete().eq('slot_id', slotId)
+    if (error) throw error
+    return
+  }
+  const { error } = await supabase.from('slot_places').upsert(
+    {
+      slot_id: slotId,
+      address: place.address.trim(),
+      latitude: place.latitude,
+      longitude: place.longitude,
+      map_url: place.map_url,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'slot_id' },
+  )
+  if (error) throw error
 }
 
 export async function updateSlot(
@@ -203,8 +245,10 @@ interface RawSlotRow {
   place_map_url: string | null
 }
 
-// The RPC has already walked slot -> heartspot -> center, so this only
-// has to name the place.
+// The RPC has already walked heartspot -> center, so this only has to name
+// the place. A home sitting never arrives with its address here: search
+// gets the area and a coordinate rounded to about a kilometre, which is
+// only ever used to sort by distance.
 function placeFromRow(r: RawSlotRow): ResolvedPlace {
   const isHome = r.place_type === 'home'
   return {
@@ -217,6 +261,7 @@ function placeFromRow(r: RawSlotRow): ResolvedPlace {
     latitude: r.place_lat,
     longitude: r.place_lng,
     map_url: r.place_map_url,
+    restricted: isHome,
   }
 }
 
@@ -274,7 +319,9 @@ export async function findPreceptors(
 
     if (!byPreceptor.has(r.preceptor_id)) {
       // Measure to where the sitting actually is, falling back to the
-      // center when the place itself carries no coordinates.
+      // center when the place itself carries no coordinates. A home
+      // sitting's coordinate is rounded to ~1 km, so say so rather than
+      // quoting a distance to one decimal place.
       const lat = r.place_lat ?? r.center_lat
       const lng = r.place_lng ?? r.center_lng
       let distance: number | null = null
@@ -287,6 +334,7 @@ export async function findPreceptors(
           ? { id: r.center_id, name: r.center_name ?? '', city: r.center_city }
           : null,
         distanceKm: distance,
+        distanceApprox: distance != null && r.place_type === 'home' && r.place_lat != null,
         slots: [],
       })
     }
@@ -407,9 +455,12 @@ export async function markNoShow(bookingId: string): Promise<void> {
 
 // The slot columns every booking query needs, including where the
 // sitting happens and the master-data rows behind it.
+// `place_details` comes back null unless row level security lets this
+// viewer read it — that is what keeps a home address behind confirmation.
 const BOOKING_SLOT_COLUMNS = `
   id, preceptor_id, center_id, day_of_week, start_time, end_time, capacity, is_active, note,
-  place_type, heartspot_id, address, latitude, longitude, map_url,
+  place_type, heartspot_id,
+  place_details:slot_places ( address, latitude, longitude, map_url ),
   center:centers ( id, name, city, address, latitude, longitude, map_url ),
   heartspot:heartspots ( id, center_id, name, address, latitude, longitude, map_url, is_active )
 `
@@ -430,10 +481,7 @@ function mapBooking(b: any, opts: { homeName?: string } = {}): BookingDetail {
         note: b.slot.note,
         place_type: b.slot.place_type ?? 'heartspot',
         heartspot_id: b.slot.heartspot_id ?? null,
-        address: b.slot.address ?? null,
-        latitude: b.slot.latitude ?? null,
-        longitude: b.slot.longitude ?? null,
-        map_url: b.slot.map_url ?? null,
+        place_details: onePlace(b.slot.place_details),
       }
     : null
 

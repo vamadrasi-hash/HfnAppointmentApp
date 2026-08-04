@@ -32,8 +32,11 @@ function BookingRow({
   const canCancel = b.status === 'requested' || b.status === 'confirmed' || b.status === 'reminded'
   const isAlternate = b.status === 'alternate_proposed'
   const reason = b.decline_reason || b.cancel_reason
-  const showDirections =
-    (b.status === 'confirmed' || b.status === 'reminded') && !isPastDate(b.booking_date)
+  // Still ahead of them, so it is worth saying where to go — or, for a
+  // home sitting not yet confirmed, that the address is still to come.
+  const showWhereToGo =
+    ['requested', 'confirmed', 'reminded', 'alternate_proposed'].includes(b.status) &&
+    !isPastDate(b.booking_date)
 
   return (
     <Card>
@@ -42,9 +45,7 @@ function BookingRow({
           <p className="truncate font-semibold text-ink-900">
             {b.preceptor?.full_name ?? 'Preceptor'}
           </p>
-          {/* Directions only once the sitting is still ahead — a closed
-              one is history, not somewhere to go. */}
-          <PlaceLine place={b.place} showAddress={showDirections} className="mt-0.5" />
+          <PlaceLine place={b.place} showAddress={showWhereToGo} className="mt-0.5" />
         </div>
         <Badge tone={statusTone(b.status)}>{statusLabel(b.status)}</Badge>
       </div>

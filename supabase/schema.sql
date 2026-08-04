@@ -6,6 +6,7 @@
 
 -- ---- Clean slate (so you can re-run during setup) -------------------
 drop table if exists bookings cascade;
+drop table if exists slot_places cascade;
 drop table if exists availability_slots cascade;
 drop table if exists profiles cascade;
 drop table if exists areas cascade;
@@ -145,24 +146,37 @@ create table availability_slots (
   is_active     boolean not null default true,
   note          text,
   -- ---- where the sitting happens ----
+  -- A heartspot sitting inherits its address from the heartspot (and that
+  -- one from its center). A home sitting keeps its address in the private
+  -- `slot_places` table below.
   place_type    sitting_place not null default 'heartspot',
   heartspot_id  uuid references heartspots(id) on delete set null,
-  -- Used for a home sitting; also an override for a heartspot one.
-  address       text,
-  latitude      double precision,
-  longitude     double precision,
-  map_url       text,
   created_at    timestamptz default now(),
-  constraint chk_time_order check (end_time > start_time),
-  -- A home sitting is useless without an address to go to.
-  constraint chk_home_has_address
-    check (place_type <> 'home' or coalesce(btrim(address), '') <> '')
+  constraint chk_time_order check (end_time > start_time)
 );
 
 create index idx_slots_preceptor on availability_slots(preceptor_id);
 create index idx_slots_day on availability_slots(day_of_week);
 create index idx_slots_center on availability_slots(center_id);
 create index idx_slots_heartspot on availability_slots(heartspot_id);
+
+-- =====================================================================
+-- SLOT PLACES — a preceptor's home address, kept apart on purpose.
+--
+-- Every signed-in user can read `availability_slots` — they have to, it
+-- is how anyone finds an open time. Row level security is row-level, so
+-- an address stored there would be readable by all of them. Holding it
+-- in its own table is what makes "only after the sitting is confirmed"
+-- enforceable rather than merely displayed.
+-- =====================================================================
+create table slot_places (
+  slot_id    uuid primary key references availability_slots(id) on delete cascade,
+  address    text not null,
+  latitude   double precision,
+  longitude  double precision,
+  map_url    text,
+  updated_at timestamptz default now()
+);
 
 -- Keep the two halves of "where" consistent: a home sitting has no
 -- heartspot, and a heartspot must belong to the center the slot is filed
@@ -176,20 +190,24 @@ as $$
 declare
   hs_center uuid;
 begin
-  new.address := nullif(btrim(coalesce(new.address, '')), '');
-  new.map_url := nullif(btrim(coalesce(new.map_url, '')), '');
-
   if new.place_type = 'home' then
     new.heartspot_id := null;
-  elsif new.heartspot_id is not null then
-    select center_id into hs_center from heartspots where id = new.heartspot_id;
-    if hs_center is null then
-      raise exception 'That heartspot no longer exists.';
+  else
+    if tg_op = 'UPDATE' then
+      -- No longer a home sitting: the private address has nothing left to
+      -- describe, so it goes with it.
+      delete from slot_places where slot_id = new.id;
     end if;
-    if new.center_id is null then
-      new.center_id := hs_center;
-    elsif new.center_id <> hs_center then
-      raise exception 'The chosen heartspot does not belong to the chosen center.';
+    if new.heartspot_id is not null then
+      select center_id into hs_center from heartspots where id = new.heartspot_id;
+      if hs_center is null then
+        raise exception 'That heartspot no longer exists.';
+      end if;
+      if new.center_id is null then
+        new.center_id := hs_center;
+      elsif new.center_id <> hs_center then
+        raise exception 'The chosen heartspot does not belong to the chosen center.';
+      end if;
     end if;
   end if;
 
@@ -384,6 +402,7 @@ alter table heartspots          enable row level security;
 alter table areas               enable row level security;
 alter table profiles            enable row level security;
 alter table availability_slots  enable row level security;
+alter table slot_places         enable row level security;
 alter table bookings            enable row level security;
 
 -- Helper: is the current user an admin? (security definer bypasses RLS,
@@ -470,6 +489,37 @@ create policy "preceptor manage own slots" on availability_slots
   using (preceptor_id = auth.uid() or is_admin())
   with check (preceptor_id = auth.uid() or is_admin());
 
+-- ---- Slot places (a preceptor's home address) -----------------------
+-- The preceptor (or an admin) owns it outright.
+create policy "preceptor manages own slot place" on slot_places
+  for all to authenticated
+  using (
+    exists (
+      select 1 from availability_slots s
+      where s.id = slot_places.slot_id and (s.preceptor_id = auth.uid() or is_admin())
+    )
+  )
+  with check (
+    exists (
+      select 1 from availability_slots s
+      where s.id = slot_places.slot_id and (s.preceptor_id = auth.uid() or is_admin())
+    )
+  );
+
+-- An abhyasi sees it only once the sitting is actually on. 'requested' is
+-- deliberately absent: asking is not the same as being invited. The
+-- finished states stay readable so a past sitting still reads sensibly.
+create policy "slot place readable once confirmed" on slot_places
+  for select to authenticated
+  using (
+    exists (
+      select 1 from bookings b
+      where b.slot_id = slot_places.slot_id
+        and b.abhyasi_id = auth.uid()
+        and b.status in ('confirmed', 'reminded', 'completed', 'no_show')
+    )
+  );
+
 -- ---- Bookings -------------------------------------------------------
 -- Visible to: the booker, the preceptor who owns the slot, or an admin.
 create policy "bookings readable to involved" on bookings
@@ -533,7 +583,10 @@ returns table (
   capacity           int,
   note               text,
   booked_count       bigint,
-  -- where the sitting happens
+  -- Where the sitting happens. For a home sitting this is deliberately
+  -- vague: no address, no link, and coordinates rounded to ~1 km. The
+  -- real address comes from `slot_places`, once there is a confirmed
+  -- booking to justify it.
   place_type         text,
   heartspot_id       uuid,
   heartspot_name     text,
@@ -553,16 +606,24 @@ as $$
     coalesce(b.cnt, 0) as booked_count,
     s.place_type::text,
     h.id, h.name,
-    -- The slot's own details win; otherwise fall back to the heartspot,
-    -- then to the center.
-    coalesce(s.address,   h.address,   c.address),
-    coalesce(s.latitude,  h.latitude,  c.latitude),
-    coalesce(s.longitude, h.longitude, c.longitude),
-    coalesce(s.map_url,   h.map_url,   c.map_url)
+    -- A heartspot's own details win; otherwise the center's.
+    case when s.place_type = 'home' then null
+         else coalesce(h.address, c.address) end,
+    -- Two decimal places is about 1.1 km — enough to sort by distance,
+    -- not enough to point at a house.
+    case when s.place_type = 'home'
+           then round(sp.latitude::numeric, 2)::double precision
+         else coalesce(h.latitude, c.latitude) end,
+    case when s.place_type = 'home'
+           then round(sp.longitude::numeric, 2)::double precision
+         else coalesce(h.longitude, c.longitude) end,
+    case when s.place_type = 'home' then null
+         else coalesce(h.map_url, c.map_url) end
   from availability_slots s
   join profiles p on p.id = s.preceptor_id
   left join centers c on c.id = s.center_id
   left join heartspots h on h.id = s.heartspot_id
+  left join slot_places sp on sp.slot_id = s.id
   left join (
     select slot_id, count(*) as cnt
     from bookings

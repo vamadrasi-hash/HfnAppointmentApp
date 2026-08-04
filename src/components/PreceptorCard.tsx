@@ -11,7 +11,7 @@ export function PreceptorCard({
   data: PreceptorWithSlots
   onBook: (slot: AvailableSlot) => void
 }) {
-  const { preceptor, center, distanceKm, slots } = data
+  const { preceptor, center, distanceKm, distanceApprox, slots } = data
 
   return (
     <Card>
@@ -28,9 +28,16 @@ export function PreceptorCard({
               </span>
             )}
             {distanceKm != null && (
-              <span className="inline-flex items-center gap-1 text-brand-600">
+              <span
+                className="inline-flex items-center gap-1 text-brand-600"
+                // A home sitting is placed to the nearest kilometre or so,
+                // so its distance is rounded rather than precise.
+                title={distanceApprox ? 'Approximate — a home address is kept private' : undefined}
+              >
                 <Navigation className="h-3.5 w-3.5" />
-                {distanceKm < 1 ? '<1' : distanceKm.toFixed(1)} km
+                {distanceApprox
+                  ? `~${Math.max(1, Math.round(distanceKm))} km`
+                  : `${distanceKm < 1 ? '<1' : distanceKm.toFixed(1)} km`}
               </span>
             )}
           </div>

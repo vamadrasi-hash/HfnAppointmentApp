@@ -35,14 +35,14 @@ This guide assumes **no prior experience** with coding tools, command lines, or 
 - Sign in with Google or email.
 - Pick a day, then filter preceptors by zone, by city/center, or by time of day.
 - See each preceptor's open times and how many places remain (for example, "1 of 4 left").
-- See **where** each sitting happens — the heartspot or the preceptor's home — with the address and a **Directions** link once it is confirmed.
+- See **where** each sitting happens — the heartspot or the preceptor's home — with the address and a **Directions** link. A preceptor's home address appears only once they have confirmed your sitting.
 - Book a sitting, add an optional note, and later cancel it.
 - Optionally use "Near me" to sort preceptors by distance from your location.
 
 **For preceptors (trainers):**
 - Everything an abhyasi can do (preceptors can also book sittings with others), **plus**:
 - Set their weekly availability — day, start and end time, **how many people can join**, and where the sitting happens.
-- Choose the place per slot: a **heartspot** of their center, or **their own home** (with an address and a Google location they pin on a map).
+- Choose the place per slot: a **heartspot** of their center, or **their own home** (with an address and a Google location they pin on a map). A home address stays private until they confirm a sitting.
 - Pause a slot without deleting it.
 - See who has booked (with the person's phone number) and mark a sitting as completed or cancelled.
 
@@ -335,8 +335,23 @@ Run the files in **`supabase/migrations/`** in the SQL Editor, in number order, 
 | `003_security_hardening.sql` | Stops a user from making themselves an admin, and takes the internal trigger functions off the public API. |
 | `004_fix_capacity_guard.sql` | Fixes the over-booking bug described below. |
 | `005_sitting_place_and_heartspots.sql` | Adds **heartspots** (a center's meditation places) and lets a slot say where the sitting happens — a heartspot or the preceptor's home, with an address and map location. Existing slots become heartspot sittings at the center they already had, and every center gets one starting heartspot named after it. |
+| `006_private_home_address.sql` | Moves a preceptor's **home address into its own table**, so it is readable only after they confirm a sitting (see below). Run it right after 005. |
 
-A fresh `schema.sql` already includes 003, 004 and 005 — the migrations are only for a database that already exists.
+A fresh `schema.sql` already includes 003–006 — the migrations are only for a database that already exists.
+
+### A preceptor's home address is private
+
+A preceptor who gives sittings at home is sharing where they live, so the app treats that address differently from a heartspot's.
+
+**Who can read it:** the preceptor themselves, an admin, and an abhyasi whose booking on that slot the preceptor has **confirmed**. A request that is still waiting does not count — asking is not the same as being invited.
+
+**What everyone else sees:** the city and center, and the words "Preceptor's home". No address, no map link, and no Directions button.
+
+This is enforced by the database, not by the screens. The address lives in its own table (`slot_places`) with a security rule on it, because every signed-in user can read `availability_slots` — that is how anyone finds an open time — and Postgres security rules work row by row, so an address kept there would be readable by all of them. Hiding it only in the app would leave it one API call away.
+
+**"Near me" still works.** The search runs through a database function that can read the private row and hands back a coordinate rounded to two decimal places — about a kilometre. That is enough to sort preceptors by distance and not enough to find a house, so home sittings show an approximate distance (`~3 km`) rather than a precise one.
+
+A heartspot's address is public, as it should be — it is a place the whole centre already knows.
 
 ### Zones, centers and heartspots
 
