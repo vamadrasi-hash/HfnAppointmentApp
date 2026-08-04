@@ -42,7 +42,7 @@ This guide assumes **no prior experience** with coding tools, command lines, or 
 **For preceptors (trainers):**
 - Everything an abhyasi can do (preceptors can also book sittings with others), **plus**:
 - Set their weekly availability — day, start and end time, **how many people can join**, and where the sitting happens.
-- Choose the place per slot: a **heartspot** of their center, or **their own home** (with an address and a Google location they pin on a map). A home address stays private until they confirm a sitting.
+- Choose the place per slot: a **heartspot** of their center, or **their own home**. The home address is entered once on the Profile screen (with a Google location they pin on a map) and stays private until they confirm a sitting.
 - Pause a slot without deleting it.
 - See who has booked (with the person's phone number) and mark a sitting as completed or cancelled.
 
@@ -336,18 +336,23 @@ Run the files in **`supabase/migrations/`** in the SQL Editor, in number order, 
 | `004_fix_capacity_guard.sql` | Fixes the over-booking bug described below. |
 | `005_sitting_place_and_heartspots.sql` | Adds **heartspots** (a center's meditation places) and lets a slot say where the sitting happens — a heartspot or the preceptor's home, with an address and map location. Existing slots become heartspot sittings at the center they already had, and every center gets one starting heartspot named after it. |
 | `006_private_home_address.sql` | Moves a preceptor's **home address into its own table**, so it is readable only after they confirm a sitting (see below). Run it right after 005. |
+| `007_home_address_on_profile.sql` | Moves that address from the slot to the **profile** — a preceptor has one home, not one per weekly slot. Also takes `home_latitude` / `home_longitude` off `profiles`, closing a hole where any signed-in user could read where anyone else lived. |
 
-A fresh `schema.sql` already includes 003–006 — the migrations are only for a database that already exists.
+A fresh `schema.sql` already includes 003–007 — the migrations are only for a database that already exists.
 
 ### A preceptor's home address is private
 
 A preceptor who gives sittings at home is sharing where they live, so the app treats that address differently from a heartspot's.
 
-**Who can read it:** the preceptor themselves, an admin, and an abhyasi whose booking on that slot the preceptor has **confirmed**. A request that is still waiting does not count — asking is not the same as being invited.
+It is entered **once, on the Profile screen** — not on each weekly slot. A slot set to "My home" simply points at it.
+
+**Who can read it:** the person themselves, an admin, and an abhyasi whose booking on one of that preceptor's home slots has been **confirmed**. A request that is still waiting does not count — asking is not the same as being invited.
 
 **What everyone else sees:** the city and center, and the words "Preceptor's home". No address, no map link, and no Directions button.
 
-This is enforced by the database, not by the screens. The address lives in its own table (`slot_places`) with a security rule on it, because every signed-in user can read `availability_slots` — that is how anyone finds an open time — and Postgres security rules work row by row, so an address kept there would be readable by all of them. Hiding it only in the app would leave it one API call away.
+This is enforced by the database, not by the screens. The address lives in its own table (`home_places`) with a security rule on it, because `profiles` is readable by every signed-in user — the app needs names on booking cards — and Postgres security rules work row by row, so an address kept there would be readable by all of them. Hiding it only in the app would leave it one API call away.
+
+The same table holds the home location an **abhyasi** saves for "near me". That used to sit on `profiles` in the clear, where anyone signed in could read it; now nobody but its owner can.
 
 **"Near me" still works.** The search runs through a database function that can read the private row and hands back a coordinate rounded to two decimal places — about a kilometre. That is enough to sort preceptors by distance and not enough to find a house, so home sittings show an approximate distance (`~3 km`) rather than a precise one.
 
@@ -361,7 +366,9 @@ The place a sitting happens is three levels deep:
 Zone  ->  Center (grouped by city)  ->  Heartspot
 ```
 
-A **center** is the administrative unit preceptors and abhyasis file themselves under; a **heartspot** is an actual room people walk into. A center usually has one, sometimes several. Admins maintain both on the **Master data** screen: open a zone, open a center, and add or edit its heartspots there.
+A **center** is the administrative unit preceptors and abhyasis file themselves under; a **heartspot** is an actual room people walk into. A center usually has one, sometimes several.
+
+Admins maintain both on the **Master data** screen. It opens **by city**, since that is how people look for a heartspot — open a city, open one of its centers, and add or edit its heartspots there. **Add heartspot** at the top starts the other way round: pick the city, then the center in it, then the details. Switch to **by zone** for the administrative view.
 
 Each level can carry an address, a map location and a Google Maps link. The most specific one wins — a sitting shows the heartspot's address, or falls back to the center's if the heartspot has none. A preceptor giving sittings at home enters their own address on the slot itself.
 

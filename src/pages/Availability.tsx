@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Plus, Pencil, Trash2, Clock, Users, Info, CalendarPlus, Home, MapPin } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { getMySlots, createSlot, updateSlot, deleteSlot, saveSlotPlace } from '../lib/api'
+import { getMySlots, createSlot, updateSlot, deleteSlot } from '../lib/api'
 import type { AvailabilitySlot, Center, Heartspot, SittingPlaceType } from '../lib/types'
 import {
   centerFullLabel,
@@ -18,12 +18,6 @@ import { Badge, Button, Card, EmptyState, Field, Input, PageLoader, Select } fro
 import { Combobox, type ComboOption } from '../components/Combobox'
 import { Modal } from '../components/Modal'
 import { PlaceLine } from '../components/PlaceLine'
-import {
-  LocationPicker,
-  emptyPlaceValue,
-  toPlaceValue,
-  type PlaceValue,
-} from '../components/LocationPicker'
 import { WEEK_DAYS, dayLabel, formatTimeRange, formatTime, cx } from '../lib/utils'
 
 interface FormState {
@@ -32,10 +26,10 @@ interface FormState {
   end_time: string
   capacity: number
   center_id: string
-  // Where the sitting happens.
+  // Where the sitting happens. A home sitting needs nothing beyond
+  // saying so — the address is on the preceptor's profile.
   place_type: SittingPlaceType
   heartspot_id: string
-  home: PlaceValue
   note: string
   is_active: boolean
 }
@@ -48,7 +42,6 @@ const emptyForm = (centerId: string): FormState => ({
   center_id: centerId,
   place_type: 'heartspot',
   heartspot_id: '',
-  home: emptyPlaceValue(),
   note: '',
   is_active: true,
 })
@@ -80,7 +73,10 @@ export default function Availability() {
     setLoading(true)
     setError(null)
     try {
-      const [mySlots, master] = await Promise.all([getMySlots(user.id), loadMasterData()])
+      const [mySlots, master] = await Promise.all([
+        getMySlots(user.id, profile?.home_place ?? null),
+        loadMasterData(),
+      ])
       setSlots(mySlots)
       setCenters(master.centers)
       setHeartspots(master.heartspots)
@@ -89,7 +85,7 @@ export default function Availability() {
     } finally {
       setLoading(false)
     }
-  }, [user])
+  }, [user, profile?.home_place])
 
   useEffect(() => {
     if (isPreceptor) load()
@@ -127,6 +123,9 @@ export default function Availability() {
 
   const chosenHeartspot = findHeartspot(heartspots, form.heartspot_id)
 
+  // A home sitting happens at the address on this preceptor's profile.
+  const homeAddress = profile?.home_place?.address?.trim() ?? ''
+
   function openAdd() {
     setEditing(null)
     setForm(emptyForm(profile?.center_id ?? centers[0]?.id ?? ''))
@@ -144,10 +143,6 @@ export default function Availability() {
       center_id: s.center_id ?? '',
       place_type: s.place_type,
       heartspot_id: s.heartspot_id ?? '',
-      home:
-        s.place_type === 'home' && s.place_details
-          ? toPlaceValue(s.place_details)
-          : emptyPlaceValue(),
       note: s.note ?? '',
       is_active: s.is_active,
     })
@@ -183,8 +178,8 @@ export default function Availability() {
       setFormError('Pick which heartspot the sitting happens at.')
       return
     }
-    if (form.place_type === 'home' && !form.home.address.trim()) {
-      setFormError('Add the address abhyasis should come to.')
+    if (form.place_type === 'home' && !homeAddress) {
+      setFormError('Add your home address in your profile before offering a sitting there.')
       return
     }
 
@@ -205,15 +200,8 @@ export default function Availability() {
 
     setSaving(true)
     try {
-      const slotId = editing
-        ? (await updateSlot(editing.id, payload), editing.id)
-        : (await createSlot({ preceptor_id: user.id, ...payload })).id
-
-      // The home address lives in its own table, so that only this
-      // preceptor and a confirmed abhyasi can read it. Switching away from
-      // a home sitting clears it — the database does that too, so the
-      // address never outlives the reason for holding it.
-      await saveSlotPlace(slotId, isHome ? form.home : null)
+      if (editing) await updateSlot(editing.id, payload)
+      else await createSlot({ preceptor_id: user.id, ...payload })
 
       setOpen(false)
       await load()
@@ -495,13 +483,30 @@ export default function Availability() {
             </div>
           ) : (
             <div className="space-y-2">
-              <LocationPicker
-                value={form.home}
-                onChange={(home) => setForm({ ...form, home })}
-                addressLabel="Home address"
-                addressHint="Where abhyasis should come. Include a landmark if that helps."
-                addressPlaceholder="Flat / house, society, road, area"
-              />
+              {homeAddress ? (
+                <div className="rounded-xl border border-brand-100 bg-brand-50/40 px-3.5 py-2.5 text-sm text-ink-600">
+                  <p className="inline-flex items-center gap-1.5 font-medium text-ink-800">
+                    <Home className="h-3.5 w-3.5 text-brand-500" /> Your home
+                  </p>
+                  <p className="mt-1">{homeAddress}</p>
+                  <Link
+                    to="/profile"
+                    className="mt-1.5 inline-block text-xs font-medium text-brand-600 underline"
+                  >
+                    Change it in your profile
+                  </Link>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-amber-100 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-800">
+                  <p>You have not set a home address yet.</p>
+                  <Link
+                    to="/profile"
+                    className="mt-1.5 inline-block text-xs font-medium underline"
+                  >
+                    Add it in your profile
+                  </Link>
+                </div>
+              )}
               <p className="rounded-xl border border-brand-100 bg-brand-50/60 px-3.5 py-2.5 text-xs text-ink-600">
                 Your address stays private until you confirm a sitting. Until then an abhyasi
                 searching only sees your city and center — never the address, and never a map pin

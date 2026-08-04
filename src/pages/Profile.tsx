@@ -1,19 +1,19 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
-  MapPin,
-  Loader2,
   Check,
   LogOut,
   CalendarCog,
   ShieldCheck,
   ChevronRight,
   Mail,
+  Lock,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { upsertProfile } from '../lib/api'
+import { upsertProfile, saveHomePlace } from '../lib/api'
 import { Avatar, Badge, Button, Card, Field, Input } from '../components/ui'
 import { ZoneCenterPicker, type ZoneCenterValue } from '../components/ZoneCenterPicker'
+import { LocationPicker, toPlaceValue, type PlaceValue } from '../components/LocationPicker'
 
 export default function Profile() {
   const { user, profile, setProfile, signOut } = useAuth()
@@ -28,12 +28,10 @@ export default function Profile() {
     city: profile?.city ?? null,
   })
 
-  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(
-    profile?.home_latitude != null && profile?.home_longitude != null
-      ? { lat: profile.home_latitude, lng: profile.home_longitude }
-      : null,
-  )
-  const [geoState, setGeoState] = useState<'idle' | 'loading' | 'error'>('idle')
+  // Where you live: the origin for your own "near me" search, and — if you
+  // are a preceptor giving sittings at home — the address abhyasis are
+  // given once you confirm their sitting.
+  const [home, setHome] = useState<PlaceValue>(toPlaceValue(profile?.home_place ?? {}))
 
   const [autoConfirm, setAutoConfirm] = useState(profile?.auto_confirm ?? false)
 
@@ -43,22 +41,6 @@ export default function Profile() {
 
   const isPreceptor = profile?.role === 'preceptor' || profile?.role === 'admin'
   const isAdmin = profile?.role === 'admin'
-
-  function useMyLocation() {
-    if (!('geolocation' in navigator)) {
-      setGeoState('error')
-      return
-    }
-    setGeoState('loading')
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude })
-        setGeoState('idle')
-      },
-      () => setGeoState('error'),
-      { enableHighAccuracy: true, timeout: 10000 },
-    )
-  }
 
   async function save() {
     if (!user) return
@@ -70,6 +52,13 @@ export default function Profile() {
     setSaving(true)
     setSaved(false)
     try {
+      // The home address is a table of its own, so it saves separately.
+      await saveHomePlace(user.id, {
+        address: home.address.trim() || null,
+        latitude: home.latitude,
+        longitude: home.longitude,
+        map_url: home.map_url,
+      })
       const updated = await upsertProfile({
         id: user.id,
         full_name: fullName.trim(),
@@ -77,8 +66,6 @@ export default function Profile() {
         zone_id: place.zoneId || null,
         center_id: place.centerId || null,
         city: place.city,
-        home_latitude: coords?.lat ?? null,
-        home_longitude: coords?.lng ?? null,
         ...(isPreceptor ? { auto_confirm: autoConfirm } : {}),
       })
       setProfile(updated)
@@ -200,33 +187,30 @@ export default function Profile() {
           onChange={setPlace}
         />
 
-        <div>
-          <p className="mb-2 text-sm font-medium text-ink-700">Home location</p>
-          {coords ? (
-            <div className="flex items-center justify-between rounded-xl border border-emerald-100 bg-emerald-50 px-3.5 py-2.5 text-sm text-emerald-700">
-              <span className="inline-flex items-center gap-2">
-                <Check className="h-4 w-4" /> Saved for “near me” search
-              </span>
-              <button
-                onClick={() => setCoords(null)}
-                className="text-xs font-medium text-emerald-700 underline"
-              >
-                Remove
-              </button>
-            </div>
-          ) : (
-            <Button variant="secondary" full onClick={useMyLocation} disabled={geoState === 'loading'}>
-              {geoState === 'loading' ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <MapPin className="h-4 w-4" />
-              )}
-              {geoState === 'loading' ? 'Getting location…' : 'Use my current location'}
-            </Button>
-          )}
-          {geoState === 'error' && (
-            <p className="mt-2 text-xs text-amber-700">Couldn’t get your location.</p>
-          )}
+        <div className="border-t border-brand-50 pt-4">
+          <p className="text-sm font-semibold text-ink-700">Home address</p>
+          <p className="mt-0.5 mb-3 text-xs text-ink-500">
+            {isPreceptor
+              ? 'Sorts “near me” by distance from here — and is the address abhyasis are given when you give a sitting at home.'
+              : 'Only used to sort preceptors by distance from you in “near me”.'}
+          </p>
+
+          <LocationPicker
+            value={home}
+            onChange={setHome}
+            addressLabel="Address"
+            addressHint="Optional. A landmark helps people find the door."
+            addressPlaceholder="Flat / house, society, road, area"
+          />
+
+          <p className="mt-3 flex items-start gap-2 rounded-xl border border-brand-100 bg-brand-50/60 px-3.5 py-2.5 text-xs text-ink-600">
+            <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-500" />
+            <span>
+              {isPreceptor
+                ? 'Nobody sees this until you confirm their sitting at your home. Before that they see only your city and center, and a map pin no closer than about a kilometre.'
+                : 'This is yours alone — no other user can read it.'}
+            </span>
+          </p>
         </div>
 
         {error && (

@@ -103,39 +103,87 @@ export async function deleteHeartspot(id: string): Promise<void> {
 // ------------------------------------------------------------------
 // PROFILE
 // ------------------------------------------------------------------
+const HOME_PLACE_EMBED = 'home_place:home_places ( address, latitude, longitude, map_url )'
+
 export async function getProfile(userId: string): Promise<Profile | null> {
   const { data, error } = await supabase
     .from('profiles')
-    .select('*')
+    .select(`*, ${HOME_PLACE_EMBED}`)
     .eq('id', userId)
     .maybeSingle()
   if (error) throw error
-  return data
+  if (!data) return null
+  return { ...data, home_place: onePlace((data as any).home_place) }
 }
 
 export async function upsertProfile(p: Partial<Profile> & { id: string }): Promise<Profile> {
-  const payload = { ...p, updated_at: new Date().toISOString() }
+  // `home_place` is a table of its own — see saveHomePlace.
+  const { home_place: _ignored, ...columns } = p
+  const payload = { ...columns, updated_at: new Date().toISOString() }
   const { data, error } = await supabase
     .from('profiles')
     .upsert(payload, { onConflict: 'id' })
-    .select('*')
+    .select(`*, ${HOME_PLACE_EMBED}`)
     .single()
   if (error) throw error
-  return data
+  return { ...data, home_place: onePlace((data as any).home_place) }
+}
+
+/**
+ * Where this person lives. Kept out of `profiles` because that table is
+ * readable by every signed-in user; this one is readable by the person
+ * themselves, an admin, and an abhyasi whose sitting at that preceptor's
+ * home is confirmed. Passing null clears it.
+ */
+export async function saveHomePlace(
+  profileId: string,
+  place: PlaceDetails | null,
+): Promise<void> {
+  const empty =
+    !place ||
+    (!place.address?.trim() && place.latitude == null && !place.map_url?.trim())
+
+  if (empty) {
+    const { error } = await supabase.from('home_places').delete().eq('profile_id', profileId)
+    if (error) throw error
+    return
+  }
+
+  const { error } = await supabase.from('home_places').upsert(
+    {
+      profile_id: profileId,
+      address: place!.address?.trim() || null,
+      latitude: place!.latitude,
+      longitude: place!.longitude,
+      map_url: place!.map_url,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'profile_id' },
+  )
+  if (error) throw error
 }
 
 // ------------------------------------------------------------------
 // AVAILABILITY SLOTS (preceptor side)
 // ------------------------------------------------------------------
-export async function getMySlots(preceptorId: string): Promise<AvailabilitySlot[]> {
+// A home sitting's address is the preceptor's own, so the caller hands it
+// in rather than the query fetching the same row once per slot. On this
+// screen the preceptor is the viewer, so they always have it.
+export async function getMySlots(
+  preceptorId: string,
+  homePlace?: PlaceDetails | null,
+): Promise<AvailabilitySlot[]> {
   const { data, error } = await supabase
     .from('availability_slots')
-    .select('*, place_details:slot_places ( address, latitude, longitude, map_url )')
+    .select('*')
     .eq('preceptor_id', preceptorId)
     .order('day_of_week', { ascending: true })
     .order('start_time', { ascending: true })
   if (error) throw error
-  return (data ?? []).map((s: any) => ({ ...s, place_details: onePlace(s.place_details) }))
+  return (data ?? []).map((s: any) => ({
+    ...s,
+    place_details: s.place_type === 'home' ? (homePlace ?? null) : null,
+  }))
 }
 
 // PostgREST returns a one-to-one embed as an object, but an unresolved
@@ -161,34 +209,6 @@ export async function createSlot(
     .single()
   if (error) throw error
   return data
-}
-
-/**
- * A home sitting's address, in the table only the preceptor, an admin and
- * a confirmed abhyasi can read. Passing null clears it — which is also
- * what the database does by itself when a slot stops being a home one.
- */
-export async function saveSlotPlace(
-  slotId: string,
-  place: PlaceDetails | null,
-): Promise<void> {
-  if (!place || !place.address?.trim()) {
-    const { error } = await supabase.from('slot_places').delete().eq('slot_id', slotId)
-    if (error) throw error
-    return
-  }
-  const { error } = await supabase.from('slot_places').upsert(
-    {
-      slot_id: slotId,
-      address: place.address.trim(),
-      latitude: place.latitude,
-      longitude: place.longitude,
-      map_url: place.map_url,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: 'slot_id' },
-  )
-  if (error) throw error
 }
 
 export async function updateSlot(
@@ -455,12 +475,13 @@ export async function markNoShow(bookingId: string): Promise<void> {
 
 // The slot columns every booking query needs, including where the
 // sitting happens and the master-data rows behind it.
-// `place_details` comes back null unless row level security lets this
-// viewer read it — that is what keeps a home address behind confirmation.
+// The preceptor's `home_place` comes back null unless row level security
+// lets this viewer read it — that is what keeps a home address behind
+// confirmation.
 const BOOKING_SLOT_COLUMNS = `
   id, preceptor_id, center_id, day_of_week, start_time, end_time, capacity, is_active, note,
   place_type, heartspot_id,
-  place_details:slot_places ( address, latitude, longitude, map_url ),
+  preceptor:profiles ( id, full_name, phone, ${HOME_PLACE_EMBED} ),
   center:centers ( id, name, city, address, latitude, longitude, map_url ),
   heartspot:heartspots ( id, center_id, name, address, latitude, longitude, map_url, is_active )
 `
@@ -481,7 +502,9 @@ function mapBooking(b: any, opts: { homeName?: string } = {}): BookingDetail {
         note: b.slot.note,
         place_type: b.slot.place_type ?? 'heartspot',
         heartspot_id: b.slot.heartspot_id ?? null,
-        place_details: onePlace(b.slot.place_details),
+        // A home sitting happens at the preceptor's home.
+        place_details:
+          b.slot.place_type === 'home' ? onePlace(b.slot.preceptor?.home_place) : null,
       }
     : null
 
@@ -520,10 +543,7 @@ export async function getMyBookings(userId: string): Promise<BookingDetail[]> {
       id, slot_id, abhyasi_id, preceptor_id, booking_date, status, note, created_at,
       requested_at, confirmed_at, decided_at, cancel_reason, decline_reason,
       alternate_date, alternate_start_time, alternate_end_time, channel_used,
-      slot:availability_slots (
-        ${BOOKING_SLOT_COLUMNS},
-        preceptor:profiles ( id, full_name, phone )
-      )
+      slot:availability_slots ( ${BOOKING_SLOT_COLUMNS} )
     `,
     )
     .eq('abhyasi_id', userId)

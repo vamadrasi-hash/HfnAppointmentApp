@@ -15,7 +15,10 @@ import {
 import type { Center, Heartspot } from '../lib/types'
 import {
   NO_CITY_GROUP,
+  centerFullLabel,
   centerGroup,
+  centersInCity,
+  cityGroups,
   compareCenters,
   countCities,
   heartspotsInCenter,
@@ -30,6 +33,7 @@ import {
   deleteHeartspot,
 } from '../lib/api'
 import { Badge, Button, Card, Field, Input, PageLoader, Select } from '../components/ui'
+import { Combobox, type ComboOption } from '../components/Combobox'
 import { Modal } from '../components/Modal'
 import {
   LocationPicker,
@@ -46,6 +50,8 @@ interface CenterForm {
 }
 
 interface HeartspotForm {
+  /** Chosen first: it narrows the centers you can file the heartspot under. */
+  city: string
   center_id: string
   name: string
   is_active: boolean
@@ -54,7 +60,11 @@ interface HeartspotForm {
 
 export default function AdminMasterData() {
   const { zones, centers, heartspots, loading, error, reload } = useMasterData()
+  // Cities are how people actually think about heartspots, so that is the
+  // way in; zones stay available for the administrative view.
+  const [view, setView] = useState<'city' | 'zone'>('city')
   const [openZone, setOpenZone] = useState<string | null>(null)
+  const [openCity, setOpenCity] = useState<string | null>(null)
   const [openCenter, setOpenCenter] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -65,7 +75,7 @@ export default function AdminMasterData() {
   const [centerDel, setCenterDel] = useState<Center | null>(null)
 
   // Heartspot add / edit
-  const [hsModal, setHsModal] = useState<{ editing: Heartspot | null; center: Center } | null>(null)
+  const [hsModal, setHsModal] = useState<{ editing: Heartspot | null } | null>(null)
   const [hsForm, setHsForm] = useState<HeartspotForm | null>(null)
   const [hsDel, setHsDel] = useState<Heartspot | null>(null)
 
@@ -73,18 +83,22 @@ export default function AdminMasterData() {
 
   const q = query.trim().toLowerCase()
 
-  // Zone -> city -> centers, which is exactly how the app's picker reads.
   // A heartspot name matches too, so searching "Adajan" finds its center.
-  const byZone = useMemo(() => {
-    const matched = q
-      ? centers.filter(
-          (c) =>
-            c.name.toLowerCase().includes(q) ||
-            (c.city ?? '').toLowerCase().includes(q) ||
-            heartspots.some((h) => h.center_id === c.id && h.name.toLowerCase().includes(q)),
-        )
-      : centers
+  const matched = useMemo(
+    () =>
+      q
+        ? centers.filter(
+            (c) =>
+              c.name.toLowerCase().includes(q) ||
+              (c.city ?? '').toLowerCase().includes(q) ||
+              heartspots.some((h) => h.center_id === c.id && h.name.toLowerCase().includes(q)),
+          )
+        : centers,
+    [centers, heartspots, q],
+  )
 
+  // Zone -> city -> centers, which is how the app's own picker reads.
+  const byZone = useMemo(() => {
     const m = new Map<string, Map<string, Center[]>>()
     for (const c of [...matched].sort(compareCenters)) {
       const cities = m.get(c.zone_id) ?? new Map<string, Center[]>()
@@ -94,7 +108,22 @@ export default function AdminMasterData() {
       m.set(c.zone_id, cities)
     }
     return m
-  }, [centers, heartspots, q])
+  }, [matched])
+
+  // City -> centers, for going straight at a city without knowing its zone.
+  const byCity = useMemo(() => {
+    const m = new Map<string, Center[]>()
+    for (const c of [...matched].sort(compareCenters)) {
+      const g = centerGroup(c)
+      m.set(g, [...(m.get(g) ?? []), c])
+    }
+    return m
+  }, [matched])
+
+  const cityOptions = useMemo<ComboOption[]>(
+    () => cityGroups(centers).map((city) => ({ value: city, label: city })),
+    [centers],
+  )
 
   // ---- center form ----------------------------------------------------
   function openCenterAdd(zoneId?: string) {
@@ -168,25 +197,52 @@ export default function AdminMasterData() {
   }
 
   // ---- heartspot form -------------------------------------------------
-  function openHsAdd(center: Center) {
-    setSaveError(null)
-    setHsForm({ center_id: center.id, name: '', is_active: true, place: emptyPlaceValue() })
-    setHsModal({ editing: null, center })
-  }
-
-  function openHsEdit(h: Heartspot, center: Center) {
+  // A heartspot is reached city-first: pick the city, then which of its
+  // centers it belongs to. Opening from a center pre-fills both.
+  function openHsAdd(center?: Center) {
     setSaveError(null)
     setHsForm({
+      city: center ? centerGroup(center) : '',
+      center_id: center?.id ?? '',
+      name: '',
+      is_active: true,
+      place: emptyPlaceValue(),
+    })
+    setHsModal({ editing: null })
+  }
+
+  function openHsEdit(h: Heartspot) {
+    const center = centers.find((c) => c.id === h.center_id)
+    setSaveError(null)
+    setHsForm({
+      city: center ? centerGroup(center) : '',
       center_id: h.center_id,
       name: h.name,
       is_active: h.is_active,
       place: toPlaceValue(h),
     })
-    setHsModal({ editing: h, center })
+    setHsModal({ editing: h })
+  }
+
+  // Changing the city invalidates a center from the old one.
+  function pickHsCity(city: string) {
+    setHsForm((f) => {
+      if (!f) return f
+      const stillThere = centersInCity(centers, city).some((c) => c.id === f.center_id)
+      return { ...f, city, center_id: stillThere ? f.center_id : '' }
+    })
   }
 
   async function saveHeartspot() {
     if (!hsForm || !hsModal) return
+    if (!hsForm.city) {
+      setSaveError('Pick the city this heartspot is in.')
+      return
+    }
+    if (!hsForm.center_id) {
+      setSaveError('Pick which center in that city it belongs to.')
+      return
+    }
     if (!hsForm.name.trim()) {
       setSaveError('Give the heartspot a name.')
       return
@@ -244,7 +300,13 @@ export default function AdminMasterData() {
             The zones, cities, centers and heartspots behind every place dropdown in the app.
           </p>
         </div>
-        <Button onClick={() => openCenterAdd()} className="shrink-0">
+      </div>
+
+      <div className="flex gap-2">
+        <Button onClick={() => openHsAdd()} className="flex-1">
+          <Plus className="h-4 w-4" /> Heartspot
+        </Button>
+        <Button variant="secondary" onClick={() => openCenterAdd()} className="flex-1">
           <Plus className="h-4 w-4" /> Center
         </Button>
       </div>
@@ -289,7 +351,96 @@ export default function AdminMasterData() {
         />
       </div>
 
+      {/* How to browse */}
+      <div className="flex gap-2">
+        {(['city', 'zone'] as const).map((v) => (
+          <button
+            key={v}
+            onClick={() => setView(v)}
+            aria-pressed={view === v}
+            className={
+              'flex-1 rounded-xl border px-3.5 py-2 text-sm font-medium transition-colors ' +
+              (view === v
+                ? 'border-brand-500 bg-brand-600 text-white shadow-soft'
+                : 'border-brand-200 bg-white text-ink-600 hover:border-brand-400')
+            }
+          >
+            By {v}
+          </button>
+        ))}
+      </div>
+
+      {/* City tree — a city, its centers, and their heartspots */}
+      {view === 'city' && (
+        <div className="space-y-3">
+          {[...byCity.entries()].map(([city, list]) => {
+            const spots = list.reduce(
+              (n, c) => n + heartspotsInCenter(heartspots, c.id).length,
+              0,
+            )
+            const isOpen = q ? true : openCity === city
+            return (
+              <Card key={city} className="overflow-hidden p-0">
+                <button
+                  onClick={() => setOpenCity(isOpen ? null : city)}
+                  className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left"
+                >
+                  <span className="flex min-w-0 flex-wrap items-center gap-2">
+                    <MapPin className="h-4 w-4 shrink-0 text-brand-500" />
+                    <span
+                      className={
+                        city === NO_CITY_GROUP
+                          ? 'italic text-ink-400'
+                          : 'font-semibold text-ink-900'
+                      }
+                    >
+                      {city}
+                    </span>
+                    <Badge tone="neutral">
+                      {list.length} center{list.length === 1 ? '' : 's'}
+                    </Badge>
+                    <Badge tone="brand">
+                      {spots} heartspot{spots === 1 ? '' : 's'}
+                    </Badge>
+                  </span>
+                  {isOpen ? (
+                    <ChevronDown className="h-4 w-4 shrink-0 text-ink-400" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4 shrink-0 text-ink-400" />
+                  )}
+                </button>
+
+                {isOpen && (
+                  <div className="space-y-1.5 border-t border-brand-50 px-4 py-3">
+                    {list.map((c) => (
+                      <CenterRow
+                        key={c.id}
+                        center={c}
+                        heartspots={heartspotsInCenter(heartspots, c.id)}
+                        expanded={openCenter === c.id}
+                        onToggle={() => setOpenCenter(openCenter === c.id ? null : c.id)}
+                        onEdit={() => openCenterEdit(c)}
+                        onDelete={() => setCenterDel(c)}
+                        onAddHeartspot={() => openHsAdd(c)}
+                        onEditHeartspot={openHsEdit}
+                        onDeleteHeartspot={(h) => setHsDel(h)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </Card>
+            )
+          })}
+          {byCity.size === 0 && (
+            <p className="rounded-xl border border-dashed border-brand-200 bg-white/60 px-4 py-6 text-center text-sm text-ink-500">
+              Nothing matches that search.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Zone tree */}
+      {view === 'zone' && (
       <div className="space-y-3">
         {zones.map((z) => {
           const cities = byZone.get(z.id) ?? new Map<string, Center[]>()
@@ -346,7 +497,7 @@ export default function AdminMasterData() {
                             onEdit={() => openCenterEdit(c)}
                             onDelete={() => setCenterDel(c)}
                             onAddHeartspot={() => openHsAdd(c)}
-                            onEditHeartspot={(h) => openHsEdit(h, c)}
+                            onEditHeartspot={openHsEdit}
                             onDeleteHeartspot={(h) => setHsDel(h)}
                           />
                         ))}
@@ -363,6 +514,7 @@ export default function AdminMasterData() {
           )
         })}
       </div>
+      )}
 
       <div className="flex items-start gap-2 rounded-xl border border-brand-100 bg-brand-50/50 px-3.5 py-3 text-sm text-ink-600">
         <Info className="mt-0.5 h-4 w-4 shrink-0 text-brand-500" />
@@ -459,10 +611,39 @@ export default function AdminMasterData() {
       >
         {hsForm && hsModal && (
           <div className="space-y-3">
-            <p className="rounded-xl border border-brand-100 bg-brand-50/40 px-3.5 py-2.5 text-sm text-ink-600">
-              In <span className="font-medium text-ink-900">{hsModal.center.name}</span>
-              {hsModal.center.city ? `, ${hsModal.center.city}` : ''}
-            </p>
+            <Field label="City" hint="Every city that has at least one center.">
+              <Combobox
+                value={hsForm.city}
+                options={cityOptions}
+                onChange={pickHsCity}
+                placeholder="Select a city"
+                searchPlaceholder="Type a city…"
+                emptyText="No city matches that."
+              />
+            </Field>
+
+            <Field
+              label="Center"
+              hint={
+                hsForm.city
+                  ? 'Which center in that city this heartspot belongs to.'
+                  : 'Pick a city first.'
+              }
+            >
+              <Combobox
+                value={hsForm.center_id}
+                options={centersInCity(centers, hsForm.city).map((c) => ({
+                  value: c.id,
+                  label: c.name,
+                  triggerLabel: centerFullLabel(c),
+                }))}
+                onChange={(v) => setHsForm({ ...hsForm, center_id: v })}
+                disabled={!hsForm.city}
+                placeholder={hsForm.city ? 'Select a center' : 'Pick a city first'}
+                searchPlaceholder="Type a center…"
+                emptyText="No center matches that in this city."
+              />
+            </Field>
 
             <Field label="Heartspot name">
               <Input

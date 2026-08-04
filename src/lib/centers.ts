@@ -44,6 +44,25 @@ export function centersInZone(centers: Center[], zoneId: string): Center[] {
   return [...list].sort(compareCenters)
 }
 
+/** Every city that has at least one center, A–Z, "no city yet" last. */
+export function cityGroups(centers: Center[]): string[] {
+  const seen = new Map<string, string>()
+  for (const c of centers) {
+    const g = centerGroup(c)
+    if (!seen.has(g.toLowerCase())) seen.set(g.toLowerCase(), g)
+  }
+  return [...seen.values()].sort((a, b) => {
+    if (a === NO_CITY_GROUP) return 1
+    if (b === NO_CITY_GROUP) return -1
+    return a.localeCompare(b, undefined, { sensitivity: 'base' })
+  })
+}
+
+export function centersInCity(centers: Center[], city: string): Center[] {
+  if (!city) return []
+  return centers.filter((c) => centerGroup(c) === city).sort(compareCenters)
+}
+
 export function countCities(centers: Center[]): number {
   const set = new Set<string>()
   for (const c of centers) {

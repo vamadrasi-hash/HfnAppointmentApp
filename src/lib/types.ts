@@ -76,11 +76,16 @@ export interface Profile {
   zone_id: string | null
   center_id: string | null
   city: string | null
-  home_latitude: number | null
-  home_longitude: number | null
   auto_confirm?: boolean
   created_at?: string
   updated_at?: string
+  /**
+   * Where this person lives, from the private `home_places` table — the
+   * origin for their own "near me" search, and, for a preceptor giving
+   * sittings at home, the address an abhyasi gets once their sitting is
+   * confirmed. Null unless the viewer is allowed to see it.
+   */
+  home_place?: PlaceDetails | null
 }
 
 export interface AvailabilitySlot {
@@ -98,10 +103,11 @@ export interface AvailabilitySlot {
   place_type: SittingPlaceType
   heartspot_id: string | null
   /**
-   * A home sitting's address, from the private `slot_places` table. Null
-   * unless the viewer is allowed to see it: the preceptor, an admin, or an
-   * abhyasi whose booking on this slot is confirmed. A heartspot sitting
-   * never has one — it inherits from the heartspot, and that from its center.
+   * For a home sitting: the preceptor's home, from the private
+   * `home_places` table. Null unless the viewer is allowed to see it —
+   * the preceptor, an admin, or an abhyasi whose sitting here is
+   * confirmed. A heartspot sitting never has one; it inherits from the
+   * heartspot, and that from its center.
    */
   place_details?: PlaceDetails | null
 }
