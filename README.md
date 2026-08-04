@@ -35,17 +35,19 @@ This guide assumes **no prior experience** with coding tools, command lines, or 
 - Sign in with Google or email.
 - Pick a day, then filter preceptors by zone, by city/center, or by time of day.
 - See each preceptor's open times and how many places remain (for example, "1 of 4 left").
+- See **where** each sitting happens — the heartspot or the preceptor's home — with the address and a **Directions** link once it is confirmed.
 - Book a sitting, add an optional note, and later cancel it.
 - Optionally use "Near me" to sort preceptors by distance from your location.
 
 **For preceptors (trainers):**
 - Everything an abhyasi can do (preceptors can also book sittings with others), **plus**:
-- Set their weekly availability — day, start and end time, how many people can come, and which center.
+- Set their weekly availability — day, start and end time, **how many people can join**, and where the sitting happens.
+- Choose the place per slot: a **heartspot** of their center, or **their own home** (with an address and a Google location they pin on a map).
 - Pause a slot without deleting it.
 - See who has booked (with the person's phone number) and mark a sitting as completed or cancelled.
 
 **For admins:**
-- A read-only overview of all zones, cities and centers.
+- An overview of all zones, cities, centers and heartspots — and the ability to **add, edit and delete centers and their heartspots**, including each one's address and map location.
 
 ---
 
@@ -205,6 +207,26 @@ The app needs two values to talk to your database.
 
 > The `anon public` key is safe to use in a web app — your data is protected by the security rules created in Step D. Do **not** paste the `service_role` key here.
 
+### Optional — the in-app map (`VITE_GOOGLE_MAPS_API_KEY`)
+
+When a preceptor gives their home address, or an admin gives a heartspot's, the app can show a map so they can **search for the place and drop a pin** on it. That map comes from Google and needs a key of your own.
+
+**You can skip this.** Without a key, the same screens still offer:
+- **"I am here now"** — uses the phone's own location, which is the easiest way when you are standing at the place; and
+- **paste a Google Maps link** — find the place in Google Maps, copy the link from the address bar, paste it in. The app reads the coordinates out of it.
+
+To turn the map on:
+1. Go to https://console.cloud.google.com → **APIs & Services → Library** and enable **Maps JavaScript API**, **Places API** and **Geocoding API**.
+2. Go to **Credentials → Create credentials → API key**.
+3. Restrict the key: **Application restrictions → Websites**, and list your app's address (e.g. `https://your-app.vercel.app/*`). An unrestricted key can be used by anyone and billed to you.
+4. Add it to `.env`:
+   ```
+   VITE_GOOGLE_MAPS_API_KEY=AIza...your-key...
+   ```
+5. If the app is already live on Vercel, add the same value there too (see the Vercel section) and redeploy.
+
+> Short Google Maps links (`maps.app.goo.gl/…`) hide their coordinates behind a redirect the browser will not follow, so the app asks for the full link instead. Open the short link first, then copy what the address bar shows.
+
 ---
 
 ## Step I — Install and run the app on your computer
@@ -257,7 +279,7 @@ The very first admin must be set by hand (this is a one-time security step). **D
 
 There are three roles:
 
-| Role | Can book sittings | Can give sittings | Sees Master data |
+| Role | Can book sittings | Can give sittings | Can edit Master data |
 |------|:---:|:---:|:---:|
 | **Abhyasi** (practitioner) | ✅ | — | — |
 | **Preceptor** (trainer) | ✅ | ✅ | — |
@@ -290,13 +312,18 @@ Picking a city/center first is fine — the zone fills itself in.
 3. To apply your changes cleanly, first **re-run `schema.sql`** (Step D) to clear old data, then **run your edited `seed.sql`** (Step E).
    - Latitude/longitude on a center are only used for the "Near me" distance feature. Leave them out if you don't have them.
 
-### Option 2 — Use the Supabase Table Editor (good for small additions)
+### Option 2 — Use the Master data screen in the app (easiest for small changes)
+
+Sign in as an admin and open **Master data**. You can add, rename and delete **centers** and their **heartspots** there, and give each one an address and a map location — no SQL and no Supabase dashboard needed. Zones are the one thing still set up in Supabase, because they change once a year at most.
+
+### Option 3 — Use the Supabase Table Editor
 
 1. In Supabase, open **Table Editor** in the left sidebar.
 2. Choose the **zones** table and add your zones (click **Insert → Insert row**).
 3. Then open **centers**, add each center, pick its **zone_id** from the dropdown, and type its **city** (leave city blank if unknown — the center still appears, under "Other centers").
+4. Then open **heartspots** and add each one, picking its **center_id**.
 
-> The order matters: zones first, then centers, because a center points at its zone.
+> The order matters: zones first, then centers, then heartspots — each one points at the level above it.
 
 ### Already have the app running with the old sample data?
 
@@ -307,8 +334,21 @@ Run the files in **`supabase/migrations/`** in the SQL Editor, in number order, 
 | `002_zone_city_center_master_data.sql` | Makes `city` optional and swaps the old placeholder zones/centers for the Gujarat data. **Heads up:** it clears the old zones and centers, so preceptors will need to re-pick their center once. |
 | `003_security_hardening.sql` | Stops a user from making themselves an admin, and takes the internal trigger functions off the public API. |
 | `004_fix_capacity_guard.sql` | Fixes the over-booking bug described below. |
+| `005_sitting_place_and_heartspots.sql` | Adds **heartspots** (a center's meditation places) and lets a slot say where the sitting happens — a heartspot or the preceptor's home, with an address and map location. Existing slots become heartspot sittings at the center they already had, and every center gets one starting heartspot named after it. |
 
-A fresh `schema.sql` already includes 003 and 004 — the migrations are only for a database that already exists.
+A fresh `schema.sql` already includes 003, 004 and 005 — the migrations are only for a database that already exists.
+
+### Zones, centers and heartspots
+
+The place a sitting happens is three levels deep:
+
+```
+Zone  ->  Center (grouped by city)  ->  Heartspot
+```
+
+A **center** is the administrative unit preceptors and abhyasis file themselves under; a **heartspot** is an actual room people walk into. A center usually has one, sometimes several. Admins maintain both on the **Master data** screen: open a zone, open a center, and add or edit its heartspots there.
+
+Each level can carry an address, a map location and a Google Maps link. The most specific one wins — a sitting shows the heartspot's address, or falls back to the center's if the heartspot has none. A preceptor giving sittings at home enters their own address on the slot itself.
 
 ---
 
@@ -333,6 +373,7 @@ Vercel hosts your app on the internet for free.
 4. Vercel will detect it is a **Vite** app automatically. Before deploying, open **Environment Variables** and add the same two values from your `.env` file:
    - `VITE_SUPABASE_URL` → your Supabase project URL
    - `VITE_SUPABASE_ANON_KEY` → your `anon public` key
+   - `VITE_GOOGLE_MAPS_API_KEY` → only if you set up the optional in-app map
 5. Click **Deploy**. After a minute you will get a live web address like `https://heartfulness-ams.vercel.app`.
 6. **Important final step:** go back to **Supabase → Authentication → URL Configuration** and add your new Vercel address to both the **Site URL** and the **Redirect URLs** (in addition to `http://localhost:5173`). If you use Google login, also add the Vercel address is **not** needed in Google (Google only needs the Supabase callback URL from Step F.1).
 
@@ -349,7 +390,7 @@ heartfulness-ams/
 ├── public/                 App icons (the teal lotus)
 ├── supabase/
 │   ├── schema.sql          Creates all tables, security rules, booking logic   ← run first
-│   ├── seed.sql            Gujarat zones & centers (with their cities)          ← run second
+│   ├── seed.sql            Gujarat zones, centers & their heartspots            ← run second
 │   └── migrations/         Changes to apply if your database already exists
 ├── src/
 │   ├── components/         Reusable pieces (buttons, cards, navigation, modals)

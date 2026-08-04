@@ -12,6 +12,7 @@ import { useAuth } from '../context/AuthContext'
 import { getMyBookings } from '../lib/api'
 import type { BookingDetail } from '../lib/types'
 import { Badge, Card, SectionTitle } from '../components/ui'
+import { PlaceLine } from '../components/PlaceLine'
 import { formatTimeRange, prettyDate, isPastDate } from '../lib/utils'
 
 function greeting(): string {
@@ -101,10 +102,7 @@ export default function Dashboard() {
                   <p className="font-semibold text-ink-900">
                     {next.preceptor?.full_name ?? 'Preceptor'}
                   </p>
-                  <p className="mt-0.5 text-sm text-ink-500">
-                    {next.center?.name}
-                    {next.center?.city ? `, ${next.center.city}` : ''}
-                  </p>
+                  <PlaceLine place={next.place} className="mt-0.5" />
                 </div>
                 <CalendarCheck className="h-5 w-5 text-brand-500" />
               </div>
@@ -154,7 +152,7 @@ export default function Dashboard() {
               to="/admin"
               icon={<ShieldCheck className="h-5 w-5" />}
               title="Master data"
-              subtitle="Zones, centers and areas"
+              subtitle="Zones, centers and heartspots"
             />
           )}
         </div>

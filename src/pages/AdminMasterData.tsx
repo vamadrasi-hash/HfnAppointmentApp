@@ -1,28 +1,87 @@
 import { useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, Layers, Building2, MapPin, Info, Search } from 'lucide-react'
-import type { Center } from '../lib/types'
+import {
+  ChevronDown,
+  ChevronRight,
+  Layers,
+  Building2,
+  MapPin,
+  Info,
+  Search,
+  Plus,
+  Pencil,
+  Trash2,
+  Sparkles,
+} from 'lucide-react'
+import type { Center, Heartspot } from '../lib/types'
 import {
   NO_CITY_GROUP,
   centerGroup,
   compareCenters,
   countCities,
+  heartspotsInCenter,
   useMasterData,
 } from '../lib/masterData'
-import { Badge, Card, Input, PageLoader } from '../components/ui'
+import {
+  createCenter,
+  updateCenter,
+  deleteCenter,
+  createHeartspot,
+  updateHeartspot,
+  deleteHeartspot,
+} from '../lib/api'
+import { Badge, Button, Card, Field, Input, PageLoader, Select } from '../components/ui'
+import { Modal } from '../components/Modal'
+import {
+  LocationPicker,
+  emptyPlaceValue,
+  toPlaceValue,
+  type PlaceValue,
+} from '../components/LocationPicker'
+
+interface CenterForm {
+  zone_id: string
+  name: string
+  city: string
+  place: PlaceValue
+}
+
+interface HeartspotForm {
+  center_id: string
+  name: string
+  is_active: boolean
+  place: PlaceValue
+}
 
 export default function AdminMasterData() {
-  const { zones, centers, loading, error } = useMasterData()
+  const { zones, centers, heartspots, loading, error, reload } = useMasterData()
   const [openZone, setOpenZone] = useState<string | null>(null)
+  const [openCenter, setOpenCenter] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  // Center add / edit
+  const [centerModal, setCenterModal] = useState<{ editing: Center | null } | null>(null)
+  const [centerForm, setCenterForm] = useState<CenterForm | null>(null)
+  const [centerDel, setCenterDel] = useState<Center | null>(null)
+
+  // Heartspot add / edit
+  const [hsModal, setHsModal] = useState<{ editing: Heartspot | null; center: Center } | null>(null)
+  const [hsForm, setHsForm] = useState<HeartspotForm | null>(null)
+  const [hsDel, setHsDel] = useState<Heartspot | null>(null)
+
+  const [saving, setSaving] = useState(false)
 
   const q = query.trim().toLowerCase()
 
   // Zone -> city -> centers, which is exactly how the app's picker reads.
+  // A heartspot name matches too, so searching "Adajan" finds its center.
   const byZone = useMemo(() => {
     const matched = q
       ? centers.filter(
           (c) =>
-            c.name.toLowerCase().includes(q) || (c.city ?? '').toLowerCase().includes(q),
+            c.name.toLowerCase().includes(q) ||
+            (c.city ?? '').toLowerCase().includes(q) ||
+            heartspots.some((h) => h.center_id === c.id && h.name.toLowerCase().includes(q)),
         )
       : centers
 
@@ -35,41 +94,188 @@ export default function AdminMasterData() {
       m.set(c.zone_id, cities)
     }
     return m
-  }, [centers, q])
+  }, [centers, heartspots, q])
+
+  // ---- center form ----------------------------------------------------
+  function openCenterAdd(zoneId?: string) {
+    setSaveError(null)
+    setCenterForm({
+      zone_id: zoneId ?? zones[0]?.id ?? '',
+      name: '',
+      city: '',
+      place: emptyPlaceValue(),
+    })
+    setCenterModal({ editing: null })
+  }
+
+  function openCenterEdit(c: Center) {
+    setSaveError(null)
+    setCenterForm({
+      zone_id: c.zone_id,
+      name: c.name,
+      city: c.city ?? '',
+      place: toPlaceValue(c),
+    })
+    setCenterModal({ editing: c })
+  }
+
+  async function saveCenter() {
+    if (!centerForm || !centerModal) return
+    if (!centerForm.name.trim()) {
+      setSaveError('Give the center a name.')
+      return
+    }
+    if (!centerForm.zone_id) {
+      setSaveError('Pick the zone this center belongs to.')
+      return
+    }
+    setSaving(true)
+    setSaveError(null)
+    const payload = {
+      zone_id: centerForm.zone_id,
+      name: centerForm.name.trim(),
+      city: centerForm.city.trim() || null,
+      address: centerForm.place.address.trim() || null,
+      latitude: centerForm.place.latitude,
+      longitude: centerForm.place.longitude,
+      map_url: centerForm.place.map_url,
+    }
+    try {
+      if (centerModal.editing) await updateCenter(centerModal.editing.id, payload)
+      else await createCenter(payload)
+      setCenterModal(null)
+      reload()
+    } catch (e: any) {
+      setSaveError(e.message ?? 'Could not save this center.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function confirmCenterDelete() {
+    if (!centerDel) return
+    setSaving(true)
+    try {
+      await deleteCenter(centerDel.id)
+      setCenterDel(null)
+      reload()
+    } catch (e: any) {
+      setSaveError(e.message ?? 'Could not delete this center.')
+      setCenterDel(null)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // ---- heartspot form -------------------------------------------------
+  function openHsAdd(center: Center) {
+    setSaveError(null)
+    setHsForm({ center_id: center.id, name: '', is_active: true, place: emptyPlaceValue() })
+    setHsModal({ editing: null, center })
+  }
+
+  function openHsEdit(h: Heartspot, center: Center) {
+    setSaveError(null)
+    setHsForm({
+      center_id: h.center_id,
+      name: h.name,
+      is_active: h.is_active,
+      place: toPlaceValue(h),
+    })
+    setHsModal({ editing: h, center })
+  }
+
+  async function saveHeartspot() {
+    if (!hsForm || !hsModal) return
+    if (!hsForm.name.trim()) {
+      setSaveError('Give the heartspot a name.')
+      return
+    }
+    setSaving(true)
+    setSaveError(null)
+    const payload = {
+      center_id: hsForm.center_id,
+      name: hsForm.name.trim(),
+      is_active: hsForm.is_active,
+      address: hsForm.place.address.trim() || null,
+      latitude: hsForm.place.latitude,
+      longitude: hsForm.place.longitude,
+      map_url: hsForm.place.map_url,
+    }
+    try {
+      if (hsModal.editing) await updateHeartspot(hsModal.editing.id, payload)
+      else await createHeartspot(payload)
+      setHsModal(null)
+      reload()
+    } catch (e: any) {
+      setSaveError(
+        e?.code === '23505'
+          ? 'This center already has a heartspot with that name.'
+          : (e.message ?? 'Could not save this heartspot.'),
+      )
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function confirmHsDelete() {
+    if (!hsDel) return
+    setSaving(true)
+    try {
+      await deleteHeartspot(hsDel.id)
+      setHsDel(null)
+      reload()
+    } catch (e: any) {
+      setSaveError(e.message ?? 'Could not delete this heartspot.')
+      setHsDel(null)
+    } finally {
+      setSaving(false)
+    }
+  }
 
   if (loading) return <PageLoader label="Loading master data…" />
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="font-serif text-2xl text-ink-900">Master data</h1>
-        <p className="mt-1 text-sm text-ink-500">
-          The zones, cities and centers behind the “Zone” and “City / Center” dropdowns.
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="font-serif text-2xl text-ink-900">Master data</h1>
+          <p className="mt-1 text-sm text-ink-500">
+            The zones, cities, centers and heartspots behind every place dropdown in the app.
+          </p>
+        </div>
+        <Button onClick={() => openCenterAdd()} className="shrink-0">
+          <Plus className="h-4 w-4" /> Center
+        </Button>
       </div>
 
-      {error && (
+      {(error || saveError) && (
         <p className="rounded-xl border border-red-100 bg-red-50 px-3.5 py-2.5 text-sm text-red-600">
-          {error}
+          {error ?? saveError}
         </p>
       )}
 
       {/* Summary counts */}
-      <div className="grid grid-cols-3 gap-3">
-        <Card className="text-center">
+      <div className="grid grid-cols-4 gap-2">
+        <Card className="p-3 text-center">
           <Layers className="mx-auto h-5 w-5 text-brand-500" />
           <p className="mt-1 font-serif text-xl text-ink-900">{zones.length}</p>
           <p className="text-xs text-ink-500">Zones</p>
         </Card>
-        <Card className="text-center">
+        <Card className="p-3 text-center">
           <MapPin className="mx-auto h-5 w-5 text-brand-500" />
           <p className="mt-1 font-serif text-xl text-ink-900">{countCities(centers)}</p>
           <p className="text-xs text-ink-500">Cities</p>
         </Card>
-        <Card className="text-center">
+        <Card className="p-3 text-center">
           <Building2 className="mx-auto h-5 w-5 text-brand-500" />
           <p className="mt-1 font-serif text-xl text-ink-900">{centers.length}</p>
           <p className="text-xs text-ink-500">Centers</p>
+        </Card>
+        <Card className="p-3 text-center">
+          <Sparkles className="mx-auto h-5 w-5 text-brand-500" />
+          <p className="mt-1 font-serif text-xl text-ink-900">{heartspots.length}</p>
+          <p className="text-xs text-ink-500">Heartspots</p>
         </Card>
       </div>
 
@@ -78,7 +284,7 @@ export default function AdminMasterData() {
         <Input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search a city or center…"
+          placeholder="Search a city, center or heartspot…"
           className="pl-10"
         />
       </div>
@@ -110,7 +316,7 @@ export default function AdminMasterData() {
               </button>
 
               {isOpen && (
-                <div className="space-y-3 border-t border-brand-50 px-4 py-3">
+                <div className="space-y-4 border-t border-brand-50 px-4 py-3">
                   {zCount === 0 && (
                     <p className="text-sm text-ink-400">No centers in this zone yet.</p>
                   )}
@@ -128,18 +334,29 @@ export default function AdminMasterData() {
                           {city}
                         </span>
                       </div>
-                      <div className="mt-1.5 flex flex-wrap gap-1.5 pl-6">
+
+                      <div className="mt-1.5 space-y-1.5 pl-6">
                         {list.map((c) => (
-                          <span
+                          <CenterRow
                             key={c.id}
-                            className="rounded-full border border-brand-100 bg-brand-50/60 px-2.5 py-0.5 text-xs text-brand-700"
-                          >
-                            {c.name}
-                          </span>
+                            center={c}
+                            heartspots={heartspotsInCenter(heartspots, c.id)}
+                            expanded={openCenter === c.id}
+                            onToggle={() => setOpenCenter(openCenter === c.id ? null : c.id)}
+                            onEdit={() => openCenterEdit(c)}
+                            onDelete={() => setCenterDel(c)}
+                            onAddHeartspot={() => openHsAdd(c)}
+                            onEditHeartspot={(h) => openHsEdit(h, c)}
+                            onDeleteHeartspot={(h) => setHsDel(h)}
+                          />
                         ))}
                       </div>
                     </div>
                   ))}
+
+                  <Button variant="secondary" full onClick={() => openCenterAdd(z.id)}>
+                    <Plus className="h-4 w-4" /> Add a center to this zone
+                  </Button>
                 </div>
               )}
             </Card>
@@ -150,11 +367,293 @@ export default function AdminMasterData() {
       <div className="flex items-start gap-2 rounded-xl border border-brand-100 bg-brand-50/50 px-3.5 py-3 text-sm text-ink-600">
         <Info className="mt-0.5 h-4 w-4 shrink-0 text-brand-500" />
         <p>
-          This is a read-only overview. To add or edit zones and centers, use the Supabase Table
-          Editor (or update <span className="font-medium">seed.sql</span>). A center with no city
-          yet still appears everywhere — it is listed under “{NO_CITY_GROUP}”.
+          Preceptors pick a heartspot from the center they choose, so a center with no heartspot
+          leaves them only the “at my home” option. A center with no city yet still appears
+          everywhere — it is listed under “{NO_CITY_GROUP}”. Zones themselves are set up in the
+          Supabase Table Editor.
         </p>
       </div>
+
+      {/* ---- Center add / edit ---- */}
+      <Modal
+        open={!!centerModal}
+        onClose={() => (saving ? null : setCenterModal(null))}
+        title={centerModal?.editing ? 'Edit center' : 'Add a center'}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setCenterModal(null)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button onClick={saveCenter} loading={saving} className="flex-1">
+              {centerModal?.editing ? 'Save changes' : 'Add center'}
+            </Button>
+          </>
+        }
+      >
+        {centerForm && (
+          <div className="space-y-3">
+            <Field label="Zone">
+              <Select
+                value={centerForm.zone_id}
+                onChange={(e) => setCenterForm({ ...centerForm, zone_id: e.target.value })}
+              >
+                <option value="">Select a zone</option>
+                {zones.map((z) => (
+                  <option key={z.id} value={z.id}>
+                    {z.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+
+            <Field label="Center name">
+              <Input
+                value={centerForm.name}
+                onChange={(e) => setCenterForm({ ...centerForm, name: e.target.value })}
+                placeholder="e.g. Surat-West-Adajan"
+              />
+            </Field>
+
+            <Field
+              label="City"
+              hint="Groups the center in the “City / Center” picker. Leave blank if unknown."
+            >
+              <Input
+                value={centerForm.city}
+                onChange={(e) => setCenterForm({ ...centerForm, city: e.target.value })}
+                placeholder="e.g. Surat"
+              />
+            </Field>
+
+            <LocationPicker
+              value={centerForm.place}
+              onChange={(place) => setCenterForm({ ...centerForm, place })}
+              addressLabel="Center address"
+              addressHint="Used when a heartspot of this center has no address of its own."
+            />
+
+            {saveError && (
+              <p className="rounded-xl border border-red-100 bg-red-50 px-3.5 py-2.5 text-sm text-red-600">
+                {saveError}
+              </p>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* ---- Heartspot add / edit ---- */}
+      <Modal
+        open={!!hsModal}
+        onClose={() => (saving ? null : setHsModal(null))}
+        title={hsModal?.editing ? 'Edit heartspot' : 'Add a heartspot'}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setHsModal(null)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button onClick={saveHeartspot} loading={saving} className="flex-1">
+              {hsModal?.editing ? 'Save changes' : 'Add heartspot'}
+            </Button>
+          </>
+        }
+      >
+        {hsForm && hsModal && (
+          <div className="space-y-3">
+            <p className="rounded-xl border border-brand-100 bg-brand-50/40 px-3.5 py-2.5 text-sm text-ink-600">
+              In <span className="font-medium text-ink-900">{hsModal.center.name}</span>
+              {hsModal.center.city ? `, ${hsModal.center.city}` : ''}
+            </p>
+
+            <Field label="Heartspot name">
+              <Input
+                value={hsForm.name}
+                onChange={(e) => setHsForm({ ...hsForm, name: e.target.value })}
+                placeholder="e.g. Adajan Heartspot"
+              />
+            </Field>
+
+            <LocationPicker
+              value={hsForm.place}
+              onChange={(place) => setHsForm({ ...hsForm, place })}
+              addressLabel="Address"
+              addressHint="What abhyasis see when they come for a sitting here."
+            />
+
+            <label className="flex items-center gap-3 rounded-xl border border-brand-100 bg-brand-50/40 px-3.5 py-2.5">
+              <input
+                type="checkbox"
+                checked={hsForm.is_active}
+                onChange={(e) => setHsForm({ ...hsForm, is_active: e.target.checked })}
+                className="h-4 w-4 rounded border-brand-300 text-brand-600 focus:ring-brand-400"
+              />
+              <span className="text-sm text-ink-700">
+                Active{' '}
+                <span className="text-ink-400">
+                  (uncheck to hide it from preceptors without deleting it)
+                </span>
+              </span>
+            </label>
+
+            {saveError && (
+              <p className="rounded-xl border border-red-100 bg-red-50 px-3.5 py-2.5 text-sm text-red-600">
+                {saveError}
+              </p>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* ---- Delete confirmations ---- */}
+      <Modal
+        open={!!centerDel}
+        onClose={() => (saving ? null : setCenterDel(null))}
+        title="Delete this center?"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setCenterDel(null)} disabled={saving}>
+              Keep it
+            </Button>
+            <Button variant="danger" onClick={confirmCenterDelete} loading={saving} className="flex-1">
+              Delete
+            </Button>
+          </>
+        }
+      >
+        {centerDel && (
+          <p className="text-sm text-ink-600">
+            <span className="font-medium text-ink-900">{centerDel.name}</span> and its{' '}
+            {heartspotsInCenter(heartspots, centerDel.id).length} heartspot(s) will be removed.
+            Anyone whose profile or schedule points at this center loses that link and will have to
+            pick again.
+          </p>
+        )}
+      </Modal>
+
+      <Modal
+        open={!!hsDel}
+        onClose={() => (saving ? null : setHsDel(null))}
+        title="Delete this heartspot?"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setHsDel(null)} disabled={saving}>
+              Keep it
+            </Button>
+            <Button variant="danger" onClick={confirmHsDelete} loading={saving} className="flex-1">
+              Delete
+            </Button>
+          </>
+        }
+      >
+        {hsDel && (
+          <p className="text-sm text-ink-600">
+            <span className="font-medium text-ink-900">{hsDel.name}</span> will be removed. Any slot
+            held there falls back to the center’s own address. To keep the history, uncheck
+            “Active” instead.
+          </p>
+        )}
+      </Modal>
+    </div>
+  )
+}
+
+function CenterRow({
+  center,
+  heartspots,
+  expanded,
+  onToggle,
+  onEdit,
+  onDelete,
+  onAddHeartspot,
+  onEditHeartspot,
+  onDeleteHeartspot,
+}: {
+  center: Center
+  heartspots: Heartspot[]
+  expanded: boolean
+  onToggle: () => void
+  onEdit: () => void
+  onDelete: () => void
+  onAddHeartspot: () => void
+  onEditHeartspot: (h: Heartspot) => void
+  onDeleteHeartspot: (h: Heartspot) => void
+}) {
+  return (
+    <div className="rounded-xl border border-brand-100 bg-brand-50/30">
+      <div className="flex items-center gap-1 px-2.5 py-1.5">
+        <button onClick={onToggle} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+          {expanded ? (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-ink-400" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ink-400" />
+          )}
+          <span className="truncate text-sm text-ink-800">{center.name}</span>
+          <span className="shrink-0 text-xs text-ink-400">
+            {heartspots.length} heartspot{heartspots.length === 1 ? '' : 's'}
+          </span>
+        </button>
+        <button
+          onClick={onEdit}
+          aria-label={`Edit ${center.name}`}
+          className="rounded-lg p-1.5 text-ink-400 hover:bg-white hover:text-brand-600"
+        >
+          <Pencil className="h-3.5 w-3.5" />
+        </button>
+        <button
+          onClick={onDelete}
+          aria-label={`Delete ${center.name}`}
+          className="rounded-lg p-1.5 text-ink-400 hover:bg-white hover:text-red-600"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      {expanded && (
+        <div className="space-y-1.5 border-t border-brand-100 px-2.5 py-2">
+          {center.address && <p className="text-xs text-ink-400">{center.address}</p>}
+
+          {heartspots.length === 0 ? (
+            <p className="text-xs text-ink-400">
+              No heartspots yet. Preceptors here can only offer sittings at their home.
+            </p>
+          ) : (
+            heartspots.map((h) => (
+              <div
+                key={h.id}
+                className="flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm text-ink-800">
+                    {h.name}
+                    {!h.is_active && <span className="ml-1.5 text-xs text-ink-400">(hidden)</span>}
+                  </p>
+                  {h.address && <p className="truncate text-xs text-ink-400">{h.address}</p>}
+                </div>
+                <button
+                  onClick={() => onEditHeartspot(h)}
+                  aria-label={`Edit ${h.name}`}
+                  className="rounded-lg p-1.5 text-ink-400 hover:bg-brand-50 hover:text-brand-600"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  onClick={() => onDeleteHeartspot(h)}
+                  aria-label={`Delete ${h.name}`}
+                  className="rounded-lg p-1.5 text-ink-400 hover:bg-red-50 hover:text-red-600"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))
+          )}
+
+          <button
+            onClick={onAddHeartspot}
+            className="inline-flex items-center gap-1 rounded-lg px-1 py-1 text-xs font-medium text-brand-600 hover:text-brand-700"
+          >
+            <Plus className="h-3.5 w-3.5" /> Add a heartspot
+          </button>
+        </div>
+      )}
     </div>
   )
 }

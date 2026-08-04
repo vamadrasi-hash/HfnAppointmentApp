@@ -1,6 +1,7 @@
 import { MapPin, Navigation, Clock } from 'lucide-react'
 import type { AvailableSlot, PreceptorWithSlots } from '../lib/types'
 import { Avatar, Badge, Card } from './ui'
+import { PlaceLine } from './PlaceLine'
 import { formatTimeRange, cx } from '../lib/utils'
 
 export function PreceptorCard({
@@ -55,11 +56,14 @@ export function PreceptorCard({
                   : 'border-brand-200 bg-brand-50/40 hover:border-brand-400 hover:bg-brand-50',
               )}
             >
-              <span className="flex flex-col">
+              <span className="flex min-w-0 flex-col">
                 <span className={cx('text-sm font-semibold', full ? 'text-ink-400' : 'text-ink-900')}>
                   {formatTimeRange(slot.start_time, slot.end_time)}
                 </span>
-                {slot.note && <span className="text-xs text-ink-400">{slot.note}</span>}
+                {/* Where this particular sitting happens — a preceptor can
+                    hold one at a heartspot and another at home. */}
+                <PlaceLine place={slot.place} className="mt-0.5 text-xs" />
+                {slot.note && <span className="mt-0.5 text-xs text-ink-400">{slot.note}</span>}
               </span>
               {full ? (
                 <Badge tone="neutral">Full</Badge>

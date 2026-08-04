@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Phone, Inbox, Info, Check, X, MapPin, CalendarClock, UserX } from 'lucide-react'
+import { Phone, Inbox, Info, Check, X, CalendarClock, UserX } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import {
   getMySittings,
@@ -14,6 +14,7 @@ import {
 import type { BookingDetail } from '../lib/types'
 import { Avatar, Badge, Button, Card, EmptyState, PageLoader, SectionTitle } from '../components/ui'
 import { Modal } from '../components/Modal'
+import { PlaceLine } from '../components/PlaceLine'
 import { formatTimeRange, formatTime, prettyDate, isPastDate, statusLabel, statusTone } from '../lib/utils'
 
 function SittingCard({
@@ -50,14 +51,9 @@ function SittingCard({
             </p>
             <Badge tone={statusTone(b.status)}>{statusLabel(b.status)}</Badge>
           </div>
-          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-500">
+          <div className="mt-1 text-sm text-ink-500">
             {b.slot && <span>{formatTimeRange(b.slot.start_time, b.slot.end_time)}</span>}
-            {b.center && (
-              <span className="inline-flex items-center gap-1">
-                <MapPin className="h-3.5 w-3.5" />
-                {b.center.name}
-              </span>
-            )}
+            <PlaceLine place={b.place} className="mt-0.5" />
           </div>
           {b.abhyasi?.phone && (
             <a

@@ -60,3 +60,18 @@ button {
 .safe-top {
   padding-top: env(safe-area-inset-top);
 }
+
+/* Google Places' suggestion list is appended to <body>, so it needs to sit
+   above the modal (z-50) the location picker usually opens inside. */
+.pac-container {
+  z-index: 60;
+  border-radius: 0.75rem;
+  border-color: #d7e6e2;
+  font-family: inherit;
+}
+
+/* The new <gmp-place-autocomplete> element, styled to match our inputs. */
+gmp-place-autocomplete {
+  width: 100%;
+  --gmp-mat-color-surface: #ffffff;
+}

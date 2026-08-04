@@ -13,6 +13,7 @@ import type { AvailableSlot, PreceptorWithSlots } from '../lib/types'
 import { Button, Field, Select, PageLoader, EmptyState, Badge } from '../components/ui'
 import { ZoneCenterPicker, type ZoneCenterValue } from '../components/ZoneCenterPicker'
 import { PreceptorCard } from '../components/PreceptorCard'
+import { PlaceLine } from '../components/PlaceLine'
 import { Modal } from '../components/Modal'
 import { upcomingDates, prettyDate, formatTimeRange, dayShort, cx } from '../lib/utils'
 
@@ -340,12 +341,9 @@ export default function FindPreceptors() {
           <div className="space-y-4">
             <div className="rounded-xl border border-brand-100 bg-brand-50/50 p-3.5">
               <p className="font-semibold text-ink-900">{target.preceptor.full_name}</p>
-              {target.center && (
-                <p className="mt-0.5 text-sm text-ink-500">
-                  {target.center.name}
-                  {target.center.city ? `, ${target.center.city}` : ''}
-                </p>
-              )}
+              {/* The full address and a directions link — this is the point
+                  where the abhyasi has to know how to get there. */}
+              <PlaceLine place={target.slot.place} showAddress className="mt-1" />
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <Badge tone="brand">{prettyDate(date)}</Badge>
                 <span className="text-sm text-ink-700">

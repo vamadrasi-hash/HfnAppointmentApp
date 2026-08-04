@@ -39,6 +39,30 @@ export interface Center {
   address: string | null
   latitude: number | null
   longitude: number | null
+  map_url: string | null
+}
+
+// A meditation place belonging to a center. A center can have several.
+export interface Heartspot {
+  id: string
+  center_id: string
+  name: string
+  address: string | null
+  latitude: number | null
+  longitude: number | null
+  map_url: string | null
+  is_active: boolean
+}
+
+// Where a sitting happens.
+export type SittingPlaceType = 'heartspot' | 'home'
+
+// The address + map details a heartspot, a center and a slot all carry.
+export interface PlaceDetails {
+  address: string | null
+  latitude: number | null
+  longitude: number | null
+  map_url: string | null
 }
 
 export interface Profile {
@@ -66,9 +90,18 @@ export interface AvailabilitySlot {
   day_of_week: number // 0=Sun ... 6=Sat
   start_time: string // 'HH:MM:SS'
   end_time: string
+  // How many abhyasis can join this sitting.
   capacity: number
   is_active: boolean
   note: string | null
+  // ---- where the sitting happens ----
+  place_type: SittingPlaceType
+  heartspot_id: string | null
+  // Filled in for a home sitting; also an override for a heartspot one.
+  address: string | null
+  latitude: number | null
+  longitude: number | null
+  map_url: string | null
 }
 
 export interface Booking {
@@ -95,9 +128,26 @@ export interface Booking {
 
 // ---- Joined / computed shapes used by the booking screens ----
 
-export interface AvailableSlot extends AvailabilitySlot {
+// A place ready to show: the address and map details have already been
+// resolved through slot -> heartspot -> center, so nothing else has to.
+export interface ResolvedPlace extends PlaceDetails {
+  type: SittingPlaceType
+  /** 'Adajan Heartspot', or the preceptor's home. */
+  name: string
+  /** The center it is filed under, e.g. 'Surat · Surat-West-Adajan'. */
+  area: string | null
+}
+
+// The raw place columns are left out: the RPC returns them already
+// resolved, as `place`.
+export interface AvailableSlot
+  extends Omit<
+    AvailabilitySlot,
+    'heartspot_id' | 'address' | 'latitude' | 'longitude' | 'map_url'
+  > {
   preceptor: Pick<Profile, 'id' | 'full_name' | 'phone'>
   center: Pick<Center, 'id' | 'name' | 'city' | 'latitude' | 'longitude'> | null
+  place: ResolvedPlace
   booked_count: number
   remaining: number
 }
@@ -114,4 +164,6 @@ export interface BookingDetail extends Booking {
   preceptor: Pick<Profile, 'id' | 'full_name' | 'phone'> | null
   abhyasi: Pick<Profile, 'id' | 'full_name' | 'phone'> | null
   center: Pick<Center, 'id' | 'name' | 'city'> | null
+  /** Where to go, ready to show. Null when the slot itself is gone. */
+  place: ResolvedPlace | null
 }

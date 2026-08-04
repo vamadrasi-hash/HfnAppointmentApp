@@ -2,13 +2,18 @@ import { supabase } from './supabase'
 import type {
   Zone,
   Center,
+  Heartspot,
   Profile,
   AvailabilitySlot,
   AvailableSlot,
   PreceptorWithSlots,
   BookingDetail,
+  ResolvedPlace,
+  SittingPlaceType,
 } from './types'
 import { distanceKm } from './utils'
+import { HOME_PLACE_NAME, MY_HOME_PLACE_NAME, resolvePlace } from './place'
+import { centerFullLabel } from './centers'
 
 // ------------------------------------------------------------------
 // MASTER DATA
@@ -31,6 +36,66 @@ export async function getCenters(zoneId?: string): Promise<Center[]> {
   const { data, error } = await q
   if (error) throw error
   return data ?? []
+}
+
+// Every center's heartspots, cached alongside the centers themselves.
+export async function getHeartspots(centerId?: string): Promise<Heartspot[]> {
+  let q = supabase.from('heartspots').select('*').order('name', { ascending: true })
+  if (centerId) q = q.eq('center_id', centerId)
+  const { data, error } = await q
+  if (error) throw error
+  return data ?? []
+}
+
+// ---- Master data editing (admins only; RLS enforces that) ------------
+export type CenterInput = Omit<Center, 'id'>
+export type HeartspotInput = Omit<Heartspot, 'id'>
+
+export async function createCenter(input: CenterInput): Promise<Center> {
+  const { data, error } = await supabase.from('centers').insert(input).select('*').single()
+  if (error) throw error
+  return data
+}
+
+export async function updateCenter(id: string, patch: Partial<CenterInput>): Promise<Center> {
+  const { data, error } = await supabase
+    .from('centers')
+    .update(patch)
+    .eq('id', id)
+    .select('*')
+    .single()
+  if (error) throw error
+  return data
+}
+
+export async function deleteCenter(id: string): Promise<void> {
+  const { error } = await supabase.from('centers').delete().eq('id', id)
+  if (error) throw error
+}
+
+export async function createHeartspot(input: HeartspotInput): Promise<Heartspot> {
+  const { data, error } = await supabase.from('heartspots').insert(input).select('*').single()
+  if (error) throw error
+  return data
+}
+
+export async function updateHeartspot(
+  id: string,
+  patch: Partial<HeartspotInput>,
+): Promise<Heartspot> {
+  const { data, error } = await supabase
+    .from('heartspots')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select('*')
+    .single()
+  if (error) throw error
+  return data
+}
+
+export async function deleteHeartspot(id: string): Promise<void> {
+  const { error } = await supabase.from('heartspots').delete().eq('id', id)
+  if (error) throw error
 }
 
 
@@ -128,6 +193,31 @@ interface RawSlotRow {
   capacity: number
   note: string | null
   booked_count: number
+  // where the sitting happens, already resolved by the RPC
+  place_type: SittingPlaceType
+  heartspot_id: string | null
+  heartspot_name: string | null
+  place_address: string | null
+  place_lat: number | null
+  place_lng: number | null
+  place_map_url: string | null
+}
+
+// The RPC has already walked slot -> heartspot -> center, so this only
+// has to name the place.
+function placeFromRow(r: RawSlotRow): ResolvedPlace {
+  const isHome = r.place_type === 'home'
+  return {
+    type: r.place_type,
+    name: isHome
+      ? HOME_PLACE_NAME
+      : (r.heartspot_name ?? r.center_name ?? 'Heartspot'),
+    area: r.center_id ? centerFullLabel({ name: r.center_name ?? '', city: r.center_city }) : null,
+    address: r.place_address,
+    latitude: r.place_lat,
+    longitude: r.place_lng,
+    map_url: r.place_map_url,
+  }
 }
 
 export async function findPreceptors(
@@ -166,6 +256,8 @@ export async function findPreceptors(
       capacity: r.capacity,
       is_active: true,
       note: r.note,
+      place_type: r.place_type,
+      place: placeFromRow(r),
       preceptor: { id: r.preceptor_id, full_name: r.preceptor_name, phone: r.preceptor_phone },
       center: r.center_id
         ? {
@@ -181,9 +273,13 @@ export async function findPreceptors(
     }
 
     if (!byPreceptor.has(r.preceptor_id)) {
+      // Measure to where the sitting actually is, falling back to the
+      // center when the place itself carries no coordinates.
+      const lat = r.place_lat ?? r.center_lat
+      const lng = r.place_lng ?? r.center_lng
       let distance: number | null = null
-      if (filters.origin && r.center_lat != null && r.center_lng != null) {
-        distance = distanceKm(filters.origin.lat, filters.origin.lng, r.center_lat, r.center_lng)
+      if (filters.origin && lat != null && lng != null) {
+        distance = distanceKm(filters.origin.lat, filters.origin.lng, lat, lng)
       }
       byPreceptor.set(r.preceptor_id, {
         preceptor: { id: r.preceptor_id, full_name: r.preceptor_name, phone: r.preceptor_phone },
@@ -309,27 +405,39 @@ export async function markNoShow(bookingId: string): Promise<void> {
   if (error) throw error
 }
 
-// My bookings as the one who booked (abhyasi or preceptor-as-booker).
-export async function getMyBookings(userId: string): Promise<BookingDetail[]> {
-  const { data, error } = await supabase
-    .from('bookings')
-    .select(
-      `
-      id, slot_id, abhyasi_id, preceptor_id, booking_date, status, note, created_at,
-      requested_at, confirmed_at, decided_at, cancel_reason, decline_reason,
-      alternate_date, alternate_start_time, alternate_end_time, channel_used,
-      slot:availability_slots (
-        id, preceptor_id, center_id, day_of_week, start_time, end_time, capacity, is_active, note,
-        preceptor:profiles ( id, full_name, phone ),
-        center:centers ( id, name, city )
-      )
-    `,
-    )
-    .eq('abhyasi_id', userId)
-    .order('booking_date', { ascending: true })
-  if (error) throw error
+// The slot columns every booking query needs, including where the
+// sitting happens and the master-data rows behind it.
+const BOOKING_SLOT_COLUMNS = `
+  id, preceptor_id, center_id, day_of_week, start_time, end_time, capacity, is_active, note,
+  place_type, heartspot_id, address, latitude, longitude, map_url,
+  center:centers ( id, name, city, address, latitude, longitude, map_url ),
+  heartspot:heartspots ( id, center_id, name, address, latitude, longitude, map_url, is_active )
+`
 
-  return (data ?? []).map((b: any) => ({
+// One shape for both booking screens. `homeName` is what a home sitting
+// is called on this screen — the preceptor sees their own.
+function mapBooking(b: any, opts: { homeName?: string } = {}): BookingDetail {
+  const slot: AvailabilitySlot | null = b.slot
+    ? {
+        id: b.slot.id,
+        preceptor_id: b.slot.preceptor_id,
+        center_id: b.slot.center_id,
+        day_of_week: b.slot.day_of_week,
+        start_time: b.slot.start_time,
+        end_time: b.slot.end_time,
+        capacity: b.slot.capacity,
+        is_active: b.slot.is_active,
+        note: b.slot.note,
+        place_type: b.slot.place_type ?? 'heartspot',
+        heartspot_id: b.slot.heartspot_id ?? null,
+        address: b.slot.address ?? null,
+        latitude: b.slot.latitude ?? null,
+        longitude: b.slot.longitude ?? null,
+        map_url: b.slot.map_url ?? null,
+      }
+    : null
+
+  return {
     id: b.id,
     slot_id: b.slot_id,
     abhyasi_id: b.abhyasi_id,
@@ -347,23 +455,34 @@ export async function getMyBookings(userId: string): Promise<BookingDetail[]> {
     alternate_start_time: b.alternate_start_time,
     alternate_end_time: b.alternate_end_time,
     channel_used: b.channel_used,
-    slot: b.slot
-      ? {
-          id: b.slot.id,
-          preceptor_id: b.slot.preceptor_id,
-          center_id: b.slot.center_id,
-          day_of_week: b.slot.day_of_week,
-          start_time: b.slot.start_time,
-          end_time: b.slot.end_time,
-          capacity: b.slot.capacity,
-          is_active: b.slot.is_active,
-          note: b.slot.note,
-        }
-      : null,
+    slot,
     preceptor: b.slot?.preceptor ?? null,
     center: b.slot?.center ?? null,
-    abhyasi: null,
-  }))
+    abhyasi: b.abhyasi ?? null,
+    place: slot ? resolvePlace(slot, b.slot?.heartspot ?? null, b.slot?.center ?? null, opts) : null,
+  }
+}
+
+// My bookings as the one who booked (abhyasi or preceptor-as-booker).
+export async function getMyBookings(userId: string): Promise<BookingDetail[]> {
+  const { data, error } = await supabase
+    .from('bookings')
+    .select(
+      `
+      id, slot_id, abhyasi_id, preceptor_id, booking_date, status, note, created_at,
+      requested_at, confirmed_at, decided_at, cancel_reason, decline_reason,
+      alternate_date, alternate_start_time, alternate_end_time, channel_used,
+      slot:availability_slots (
+        ${BOOKING_SLOT_COLUMNS},
+        preceptor:profiles ( id, full_name, phone )
+      )
+    `,
+    )
+    .eq('abhyasi_id', userId)
+    .order('booking_date', { ascending: true })
+  if (error) throw error
+
+  return (data ?? []).map((b) => mapBooking(b))
 }
 
 // Incoming bookings on MY slots (preceptor view of who is coming).
@@ -384,8 +503,7 @@ export async function getMySittings(preceptorId: string): Promise<BookingDetail[
       id, slot_id, abhyasi_id, preceptor_id, booking_date, status, note, created_at,
       requested_at, confirmed_at, decided_at, cancel_reason, decline_reason,
       alternate_date, alternate_start_time, alternate_end_time, channel_used,
-      slot:availability_slots ( id, preceptor_id, center_id, day_of_week, start_time, end_time, capacity, is_active, note,
-        center:centers ( id, name, city ) ),
+      slot:availability_slots ( ${BOOKING_SLOT_COLUMNS} ),
       abhyasi:profiles ( id, full_name, phone )
     `,
     )
@@ -393,39 +511,6 @@ export async function getMySittings(preceptorId: string): Promise<BookingDetail[
     .order('booking_date', { ascending: true })
   if (error) throw error
 
-  return (data ?? []).map((b: any) => ({
-    id: b.id,
-    slot_id: b.slot_id,
-    abhyasi_id: b.abhyasi_id,
-    preceptor_id: b.preceptor_id,
-    booking_date: b.booking_date,
-    status: b.status,
-    note: b.note,
-    created_at: b.created_at,
-    requested_at: b.requested_at,
-    confirmed_at: b.confirmed_at,
-    decided_at: b.decided_at,
-    cancel_reason: b.cancel_reason,
-    decline_reason: b.decline_reason,
-    alternate_date: b.alternate_date,
-    alternate_start_time: b.alternate_start_time,
-    alternate_end_time: b.alternate_end_time,
-    channel_used: b.channel_used,
-    slot: b.slot
-      ? {
-          id: b.slot.id,
-          preceptor_id: b.slot.preceptor_id,
-          center_id: b.slot.center_id,
-          day_of_week: b.slot.day_of_week,
-          start_time: b.slot.start_time,
-          end_time: b.slot.end_time,
-          capacity: b.slot.capacity,
-          is_active: b.slot.is_active,
-          note: b.slot.note,
-        }
-      : null,
-    preceptor: null,
-    center: b.slot?.center ?? null,
-    abhyasi: b.abhyasi ?? null,
-  }))
+  // This is the preceptor's own screen, so a home sitting is *their* home.
+  return (data ?? []).map((b) => mapBooking(b, { homeName: MY_HOME_PLACE_NAME }))
 }
