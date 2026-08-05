@@ -12,7 +12,7 @@ import {
   Trash2,
   Sparkles,
 } from 'lucide-react'
-import type { Center, Heartspot } from '../lib/types'
+import type { Center, Heartspot, SessionType } from '../lib/types'
 import {
   NO_CITY_GROUP,
   centerFullLabel,
@@ -31,6 +31,9 @@ import {
   createHeartspot,
   updateHeartspot,
   deleteHeartspot,
+  createSessionType,
+  updateSessionType,
+  deleteSessionType,
 } from '../lib/api'
 import { Badge, Button, Card, Field, Input, PageLoader, Select } from '../components/ui'
 import { Combobox, type ComboOption } from '../components/Combobox'
@@ -58,8 +61,16 @@ interface HeartspotForm {
   place: PlaceValue
 }
 
+interface SessionTypeForm {
+  name: string
+  name_hi: string
+  description: string
+  sort_order: number
+  is_active: boolean
+}
+
 export default function AdminMasterData() {
-  const { zones, centers, heartspots, loading, error, reload } = useMasterData()
+  const { zones, centers, heartspots, sessionTypes, loading, error, reload } = useMasterData()
   // Cities are how people actually think about heartspots, so that is the
   // way in; zones stay available for the administrative view.
   const [view, setView] = useState<'city' | 'zone'>('city')
@@ -78,6 +89,11 @@ export default function AdminMasterData() {
   const [hsModal, setHsModal] = useState<{ editing: Heartspot | null } | null>(null)
   const [hsForm, setHsForm] = useState<HeartspotForm | null>(null)
   const [hsDel, setHsDel] = useState<Heartspot | null>(null)
+
+  // Type of session add / edit
+  const [stModal, setStModal] = useState<{ editing: SessionType | null } | null>(null)
+  const [stForm, setStForm] = useState<SessionTypeForm | null>(null)
+  const [stDel, setStDel] = useState<SessionType | null>(null)
 
   const [saving, setSaving] = useState(false)
 
@@ -289,6 +305,79 @@ export default function AdminMasterData() {
     }
   }
 
+  // ---- type of session form -------------------------------------------
+  function openStAdd() {
+    setSaveError(null)
+    setStForm({
+      name: '',
+      name_hi: '',
+      description: '',
+      // Straight after the last one, so a new kind lands at the bottom of
+      // the seeker's dropdown rather than the top.
+      sort_order: sessionTypes.reduce((n, t) => Math.max(n, t.sort_order), 0) + 1,
+      is_active: true,
+    })
+    setStModal({ editing: null })
+  }
+
+  function openStEdit(t: SessionType) {
+    setSaveError(null)
+    setStForm({
+      name: t.name,
+      name_hi: t.name_hi ?? '',
+      description: t.description ?? '',
+      sort_order: t.sort_order,
+      is_active: t.is_active,
+    })
+    setStModal({ editing: t })
+  }
+
+  async function saveSessionType() {
+    if (!stForm || !stModal) return
+    if (!stForm.name.trim()) {
+      setSaveError('Give this type of session a name.')
+      return
+    }
+    setSaving(true)
+    setSaveError(null)
+    const payload = {
+      name: stForm.name.trim(),
+      name_hi: stForm.name_hi.trim() || null,
+      description: stForm.description.trim() || null,
+      sort_order: stForm.sort_order,
+      is_active: stForm.is_active,
+    }
+    try {
+      if (stModal.editing) await updateSessionType(stModal.editing.id, payload)
+      else await createSessionType(payload)
+      setStModal(null)
+      reload()
+    } catch (e: any) {
+      setSaveError(
+        e?.code === '23505'
+          ? 'There is already a type of session with that name.'
+          : (e.message ?? 'Could not save this type of session.'),
+      )
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function confirmStDelete() {
+    if (!stDel) return
+    setSaving(true)
+    try {
+      await deleteSessionType(stDel.id)
+      setStDel(null)
+      reload()
+    } catch (e: any) {
+      setSaveError(e.message ?? 'Could not delete this type of session.')
+      setStDel(null)
+    } finally {
+      setSaving(false)
+    }
+  }
+
   if (loading) return <PageLoader label="Loading master data…" />
 
   return (
@@ -340,6 +429,62 @@ export default function AdminMasterData() {
           <p className="text-xs text-ink-500">Heartspots</p>
         </Card>
       </div>
+
+      {/* Types of session — the dropdown a seeker picks from when they
+          request a sitting. */}
+      <Card className="space-y-2 p-0">
+        <div className="flex items-center justify-between gap-2 px-4 pt-3">
+          <div>
+            <p className="font-semibold text-ink-900">Types of session</p>
+            <p className="mt-0.5 text-xs text-ink-500">
+              What a seeker chooses when they request a sitting.
+            </p>
+          </div>
+          <Button variant="secondary" onClick={openStAdd} className="shrink-0">
+            <Plus className="h-4 w-4" /> Add
+          </Button>
+        </div>
+
+        <div className="space-y-1.5 px-4 pb-4">
+          {sessionTypes.length === 0 ? (
+            <p className="text-sm text-ink-400">
+              None yet. Without one, a seeker is not asked what kind of sitting they want.
+            </p>
+          ) : (
+            sessionTypes.map((t) => (
+              <div
+                key={t.id}
+                className="flex items-center gap-1 rounded-xl border border-brand-100 bg-brand-50/30 px-2.5 py-1.5"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm text-ink-800">
+                    {t.name}
+                    {t.name_hi && <span className="ml-1.5 text-ink-400">· {t.name_hi}</span>}
+                    {!t.is_active && <span className="ml-1.5 text-xs text-ink-400">(hidden)</span>}
+                  </p>
+                  {t.description && (
+                    <p className="truncate text-xs text-ink-400">{t.description}</p>
+                  )}
+                </div>
+                <button
+                  onClick={() => openStEdit(t)}
+                  aria-label={`Edit ${t.name}`}
+                  className="rounded-lg p-1.5 text-ink-400 hover:bg-white hover:text-brand-600"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  onClick={() => setStDel(t)}
+                  aria-label={`Delete ${t.name}`}
+                  className="rounded-lg p-1.5 text-ink-400 hover:bg-white hover:text-red-600"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      </Card>
 
       <div className="relative">
         <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-400" />
@@ -684,6 +829,85 @@ export default function AdminMasterData() {
         )}
       </Modal>
 
+      {/* ---- Type of session add / edit ---- */}
+      <Modal
+        open={!!stModal}
+        onClose={() => (saving ? null : setStModal(null))}
+        title={stModal?.editing ? 'Edit type of session' : 'Add a type of session'}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setStModal(null)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button onClick={saveSessionType} loading={saving} className="flex-1">
+              {stModal?.editing ? 'Save changes' : 'Add type'}
+            </Button>
+          </>
+        }
+      >
+        {stForm && (
+          <div className="space-y-3">
+            <Field label="Name">
+              <Input
+                value={stForm.name}
+                onChange={(e) => setStForm({ ...stForm, name: e.target.value })}
+                placeholder="e.g. Introductory sitting"
+              />
+            </Field>
+
+            <Field
+              label="Name in Hindi"
+              hint="Used in the messages that go out in both languages."
+            >
+              <Input
+                value={stForm.name_hi}
+                onChange={(e) => setStForm({ ...stForm, name_hi: e.target.value })}
+                placeholder="जैसे परिचयात्मक सिटिंग"
+              />
+            </Field>
+
+            <Field label="Description" hint="Shown under the dropdown while a seeker chooses.">
+              <Input
+                value={stForm.description}
+                onChange={(e) => setStForm({ ...stForm, description: e.target.value })}
+                placeholder="e.g. The first sittings for someone new to Heartfulness."
+              />
+            </Field>
+
+            <Field label="Order" hint="Lower numbers come first in the dropdown.">
+              <Input
+                type="number"
+                value={stForm.sort_order}
+                onChange={(e) =>
+                  setStForm({ ...stForm, sort_order: Number(e.target.value) || 0 })
+                }
+              />
+            </Field>
+
+            <label className="flex items-center gap-3 rounded-xl border border-brand-100 bg-brand-50/40 px-3.5 py-2.5">
+              <input
+                type="checkbox"
+                checked={stForm.is_active}
+                onChange={(e) => setStForm({ ...stForm, is_active: e.target.checked })}
+                className="h-4 w-4 rounded border-brand-300 text-brand-600 focus:ring-brand-400"
+              />
+              <span className="text-sm text-ink-700">
+                Active{' '}
+                <span className="text-ink-400">
+                  (uncheck to take it out of the dropdown without losing past bookings)
+                </span>
+              </span>
+            </label>
+
+            {saveError && (
+              <p className="rounded-xl border border-red-100 bg-red-50 px-3.5 py-2.5 text-sm text-red-600">
+                {saveError}
+              </p>
+            )}
+          </div>
+        )}
+      </Modal>
+
       {/* ---- Delete confirmations ---- */}
       <Modal
         open={!!centerDel}
@@ -730,6 +954,30 @@ export default function AdminMasterData() {
             <span className="font-medium text-ink-900">{hsDel.name}</span> will be removed. Any slot
             held there falls back to the center’s own address. To keep the history, uncheck
             “Active” instead.
+          </p>
+        )}
+      </Modal>
+
+      <Modal
+        open={!!stDel}
+        onClose={() => (saving ? null : setStDel(null))}
+        title="Delete this type of session?"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setStDel(null)} disabled={saving}>
+              Keep it
+            </Button>
+            <Button variant="danger" onClick={confirmStDelete} loading={saving} className="flex-1">
+              Delete
+            </Button>
+          </>
+        }
+      >
+        {stDel && (
+          <p className="text-sm text-ink-600">
+            <span className="font-medium text-ink-900">{stDel.name}</span> will be removed, and any
+            sitting booked as this type is left without one. To take it out of the dropdown while
+            keeping that history, uncheck “Active” instead.
           </p>
         )}
       </Modal>

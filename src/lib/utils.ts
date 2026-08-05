@@ -104,6 +104,17 @@ export function bookingTimes(b: {
   return null
 }
 
+// ---- How many are coming ---------------------------------------------
+// A booking can bring people with it, so it takes 1 + accompanying_count
+// places in the sitting. The seeker is always one of them.
+export function partySize(b: { accompanying_count?: number | null }): number {
+  return 1 + (b.accompanying_count ?? 0)
+}
+
+export function peopleLabel(n: number): string {
+  return n === 1 ? '1 person' : `${n} people`
+}
+
 // ---- Dates ------------------------------------------------------------
 export const ISO_DATE = 'yyyy-MM-dd'
 
