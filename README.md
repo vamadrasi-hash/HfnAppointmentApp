@@ -409,7 +409,9 @@ You don't need to read the code, but here is a map in case you're curious:
 
 ```
 heartfulness-ams/
-├── public/                 App icons (rendered from favicon.svg by scripts/make_icons.py)
+├── assets/brand/           The Heartfulness artwork, as supplied            ← the originals
+├── public/                 Logo files and app icons, generated from it
+│                           (scripts/prepare_logos.py, then scripts/make_icons.py)
 ├── supabase/
 │   ├── schema.sql          Creates all tables, security rules, booking logic   ← run first
 │   ├── seed.sql            Gujarat zones, centers & their heartspots            ← run second

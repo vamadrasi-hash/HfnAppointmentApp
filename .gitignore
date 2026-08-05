@@ -10,3 +10,7 @@ dist-ssr
 .vscode/*
 !.vscode/extensions.json
 *.log
+
+# Python bytecode from the asset scripts.
+__pycache__/
+*.pyc

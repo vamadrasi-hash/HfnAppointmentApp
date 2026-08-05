@@ -179,7 +179,7 @@ export function PageLoader({ label = 'Loading…' }: { label?: string }) {
     <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 text-ink-500">
       <div className="relative flex h-16 w-16 items-center justify-center">
         <span className="absolute inset-0 animate-breathe rounded-full bg-brand-100" />
-        <HeartfulnessMark className="relative h-11 w-11 text-brand-600" />
+        <HeartfulnessMark className="relative h-10 w-10" />
       </div>
       <span className="text-sm">{label}</span>
     </div>

@@ -2,7 +2,7 @@ import { Outlet, useNavigate } from 'react-router-dom'
 import { BottomNav } from './BottomNav'
 import { useAuth } from '../context/AuthContext'
 import { Avatar } from './ui'
-import { HeartfulnessMark } from './Logo'
+import { HeartfulnessMark, HeartfulnessWordmark } from './Logo'
 
 export function Layout() {
   const { profile } = useAuth()
@@ -18,15 +18,14 @@ export function Layout() {
             className="flex items-center gap-2.5"
             aria-label="Home"
           >
-            <span className="relative flex h-9 w-9 items-center justify-center">
+            <span className="relative flex h-9 w-9 shrink-0 items-center justify-center">
               <span className="absolute inset-0 rounded-full bg-brand-50" />
-              <HeartfulnessMark className="relative h-6 w-6 text-brand-600" />
+              <HeartfulnessMark className="relative h-[1.45rem] w-[1.45rem]" />
             </span>
-            <span
-              className="font-serif text-lg leading-none tracking-[-0.01em] text-ink-900"
-              style={{ fontVariationSettings: "'opsz' 144" }}
-            >
-              heartfulness <span className="text-brand-600">sittings</span>
+            <HeartfulnessWordmark compact className="w-[5.6rem]" />
+            <span className="h-4 w-px bg-brand-200" />
+            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-brand-600">
+              Sittings
             </span>
           </button>
           {profile && (
