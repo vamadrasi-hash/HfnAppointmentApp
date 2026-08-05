@@ -18,9 +18,9 @@ export function Layout() {
             className="flex items-center gap-2.5"
             aria-label="Home"
           >
-            <span className="relative flex h-8 w-8 items-center justify-center">
+            <span className="relative flex h-9 w-9 items-center justify-center">
               <span className="absolute inset-0 rounded-full bg-brand-50" />
-              <HeartfulnessMark className="relative h-5 w-5 text-brand-600" />
+              <HeartfulnessMark className="relative h-6 w-6 text-brand-600" />
             </span>
             <span
               className="font-serif text-lg leading-none tracking-[-0.01em] text-ink-900"

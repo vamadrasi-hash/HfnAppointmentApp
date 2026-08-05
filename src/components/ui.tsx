@@ -177,9 +177,9 @@ export function Spinner({ className }: { className?: string }) {
 export function PageLoader({ label = 'Loading…' }: { label?: string }) {
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 text-ink-500">
-      <div className="relative flex h-14 w-14 items-center justify-center">
+      <div className="relative flex h-16 w-16 items-center justify-center">
         <span className="absolute inset-0 animate-breathe rounded-full bg-brand-100" />
-        <HeartfulnessMark className="relative h-9 w-9 text-brand-600" />
+        <HeartfulnessMark className="relative h-11 w-11 text-brand-600" />
       </div>
       <span className="text-sm">{label}</span>
     </div>

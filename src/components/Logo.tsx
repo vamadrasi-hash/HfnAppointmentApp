@@ -1,43 +1,40 @@
 import { cx } from '../lib/utils'
 
-/* The seated figure, drawn once and mirrored so the mark stays perfectly
-   balanced. Everything is filled with `currentColor`, so the mark simply takes
-   whatever text colour it is placed in. */
-const ARM =
-  'M143 56 C 108 84, 60 134, 64 178 C 67 206, 116 220, 152 224 ' +
-  'C 126 212, 90 198, 92 174 C 94 134, 128 84, 143 56 Z'
-const LEG = 'M178 196 C 128 220, 74 234, 22 242 C 86 292, 140 268, 178 196 Z'
-const MIRROR = 'translate(300,0) scale(-1,1)'
+/* The seated figure, traced from the Heartfulness mark.
+ *
+ * Every element is one calligraphic stroke: an outline that swells in the
+ * middle and tapers to a point at both ends, the way a brush leaves it. They
+ * are filled with `currentColor`, so the mark takes whatever text colour it is
+ * placed in. */
+const STROKES = [
+  // the head, and the swirl that cradles it
+  'M134 20a16 16 0 1 0 0 32 16 16 0 1 0 0-32ZM134 27a9 9 0 1 1 0 18 9 9 0 1 1 0-18Z',
+  'M110 30C109.1 16.4 129.1 10.4 142 15C126.9 5.6 106.9 11.6 110 30Z',
+  // the flame held at the heart
+  'M151 76C137.6 103 137 126.4 149 154C162.4 127 163 103.6 151 76Z',
+  // arms, crossing just past one another at the base
+  'M142 60C82 112.5 48 194.5 153 228C64 193.5 98 111.5 142 60Z',
+  'M158 60C202 111.5 236 193.5 147 228C252 194.5 218 112.5 158 60Z',
+  // legs, folded
+  'M192 206C136.4 236.1 64.4 248.1 16 234C67.6 267.9 139.6 255.9 192 206Z',
+  'M108 206C160.4 255.9 232.4 267.9 284 234C235.6 248.1 163.6 236.1 108 206Z',
+]
 
 export function HeartfulnessMark({ className, title }: { className?: string; title?: string }) {
   return (
     <svg
-      viewBox="0 0 300 288"
+      viewBox="0 0 300 276"
       fill="currentColor"
+      fillRule="evenodd"
       className={cx('block', className)}
       role={title ? 'img' : undefined}
       aria-label={title}
       aria-hidden={title ? undefined : true}
     >
-      {/* head */}
-      <path
-        fillRule="evenodd"
-        d="M148 14a17 17 0 1 0 0 34 17 17 0 1 0 0-34Zm0 8.5a8.5 8.5 0 1 1 0 17 8.5 8.5 0 1 1 0-17Z"
-      />
-      <path d="M136 20 C 128 11, 116 11, 112 20 C 119 15, 127 17, 133 25 Z" />
-      {/* the flame held at the heart */}
-      <path d="M150 72 C 160 100, 161 126, 151 150 C 141 126, 140 100, 150 72 Z" />
-      <circle cx="151" cy="161" r="5.5" />
-      {/* arms */}
-      <path d={ARM} />
-      <g transform={MIRROR}>
-        <path d={ARM} />
-      </g>
-      {/* legs, folded */}
-      <path d={LEG} />
-      <g transform={MIRROR}>
-        <path d={LEG} />
-      </g>
+      {STROKES.map((d) => (
+        <path key={d} d={d} />
+      ))}
+      <circle cx="150" cy="165" r="4.5" />
     </svg>
   )
 }
@@ -64,9 +61,9 @@ export function HeartfulnessWordmark({ className }: { className?: string }) {
 export function HeartfulnessLockup({ className }: { className?: string }) {
   return (
     <div className={cx('flex flex-col items-center', className)}>
-      <div className="relative mb-6 flex h-24 w-24 items-center justify-center">
+      <div className="relative mb-6 flex h-28 w-28 items-center justify-center">
         <span className="absolute inset-0 animate-breathe rounded-full bg-brand-100" />
-        <HeartfulnessMark className="relative h-16 w-16 text-brand-600" />
+        <HeartfulnessMark className="relative h-20 w-20 text-brand-600" />
       </div>
       <HeartfulnessWordmark className="text-[2.35rem] text-ink-900" />
     </div>
