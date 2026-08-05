@@ -39,9 +39,11 @@ This guide assumes **no prior experience** with coding tools, command lines, or 
 - Be shown the **next available time** and whose it is, without having to tap through the days one by one.
 - When nobody is free nearby, see **everyone else who is free**, grouped by area and then by center.
 - Ask a preceptor for a time they haven't published, where that preceptor allows it.
+- Say **what kind of sitting** it is (a regular individual sitting, an introductory one, or whatever else an admin has added) and **how many people are coming along** — and be told, before the request goes, when that is more than the sitting has room for.
 - Book a sitting, add an optional note, and later cancel it.
 - Optionally use "Near me" to sort preceptors by distance from your location.
-- Be **notified** when a request is confirmed, declined, cancelled, or answered with another time.
+- Be **notified** when a request is confirmed, declined, cancelled, or answered with another time — in the app, and as a **pop-up** on the phone once they allow it.
+- Give a **mobile number** when registering, which the preceptor giving their sitting is shown and nobody else.
 
 **For preceptors (trainers):**
 - Everything an abhyasi can do (preceptors can also book sittings with others), **plus**, once an admin has approved the account:
@@ -51,10 +53,13 @@ This guide assumes **no prior experience** with coding tools, command lines, or 
 - Pause a slot without deleting it.
 - Be **notified** whenever someone requests a sitting, from their schedule or outside it.
 - See who has booked (with the person's phone number) and mark a sitting as completed or cancelled.
+- Decide when someone asks to bring **more people than the sitting holds** — let them all come, or approve only the number the slot was opened for.
+- **Cancel a confirmed sitting with a message of their own**, which the abhyasi is shown word for word, in English and Hindi — and send that same message straight to their WhatsApp, with their number already filled in.
 
 **For admins:**
 - **Approve preceptors.** Anyone can sign up as one; nothing they publish reaches an abhyasi until an admin says yes.
 - An overview of all zones, cities, centers and heartspots — and the ability to **add, edit and delete centers and their heartspots**, including each one's address and map location.
+- Maintain the **types of session** a seeker can choose from.
 
 ---
 
@@ -377,9 +382,10 @@ Run the files in **`supabase/migrations/`** in the SQL Editor, in number order, 
 | `007_home_address_on_profile.sql` | Moves that address from the slot to the **profile** — a preceptor has one home, not one per weekly slot. Also takes `home_latitude` / `home_longitude` off `profiles`, closing a hole where any signed-in user could read where anyone else lived. |
 | `008_preceptor_approval.sql` | Makes a **preceptor account wait for an admin's approval** before it can publish a schedule or take requests (see below). Everyone already registered as a preceptor is marked approved, so nothing in a running app stops working — only new sign-ups have to wait. |
 | `009_open_requests_and_notifications.sql` | Lets a preceptor **accept requests outside their schedule**, adds the **notifications** inbox, and adds the look-ahead search behind "next available time" and the by-area list. |
-| `010_mobile_number_and_push.sql` | Makes a **mobile number part of registering** and puts it in the preceptor's notification, sends notifications out over **realtime** so the app can pop them up as they arrive, and adds the `push_subscriptions` table for pop-ups with the app closed. Accounts made before this keep working; they just cannot empty their number. |
+| `010_cancellation_message_and_session_types.sql` | Adds the **types of session** master list, lets a booking say **how many people are coming** (so places are counted by people, not bookings), and carries a preceptor's **cancellation message in both languages** through to the abhyasi's notification. |
+| `011_mobile_number_and_push.sql` | Makes a **mobile number part of registering** and puts it in the preceptor's notification, sends notifications out over **realtime** so the app can pop them up as they arrive, and adds the `push_subscriptions` table for pop-ups with the app closed. Accounts made before this keep working; they just cannot empty their number. |
 
-A fresh `schema.sql` already includes 003–010 — the migrations are only for a database that already exists.
+A fresh `schema.sql` already includes 003–011 — the migrations are only for a database that already exists.
 
 ### Being asked for a time outside the schedule
 
@@ -395,6 +401,34 @@ An **unapproved** preceptor is not listed and cannot be asked, switch or no swit
 
 The rules are enforced in the database, not on the screen: a request with no slot is refused unless that preceptor has opted in and been approved.
 
+### What kind of sitting, and how many are coming
+
+Requesting a sitting asks two more things.
+
+**Type of session.** A dropdown filled from the `session_types` table — master data, like zones and centers. It starts with **Regular individual sitting** and **Introductory sitting**; admins add, rename, reorder or hide others on the **Master data** screen. Hiding one (unchecking *Active*) takes it out of the dropdown while sittings already booked as that type keep their name.
+
+**How many people are accompanying you.** The seeker counts themselves, so "2 people with me" is a party of three, and a booking now takes **1 + accompanying** places in the slot rather than always one. "3 of 4 left" therefore means three more *people*.
+
+**Asking for more than the slot holds.** A preceptor who opened a sitting for four has said what they can manage, but a fifth person arriving is theirs to allow — so the app neither refuses it silently nor lets it through unnoticed:
+
+1. The seeker is told before the request goes: *"…allows 4 people at this sitting. You have chosen 5. We will ask them for 5. If they agree, all 5 of you can come. If not, 4 will be approved."* They can change the number or ask anyway.
+2. The preceptor sees the request with both numbers and two buttons — **Confirm all 5** or **Confirm 4 only**.
+3. Whatever they choose, the abhyasi is told: a trimmed party reads *"4 of the 5 you asked for"* on the booking and in the notification.
+
+Such a request is **never auto-confirmed**, even for a preceptor who has auto-confirm on: that promise is about the sitting as they published it. A slot with no free place at all is still full, and the database says so.
+
+Only the preceptor (or an admin) can change how many people are approved, and what the seeker originally asked for can never be rewritten — both are enforced in the database, not on the screen.
+
+### Cancelling a sitting, in the preceptor's own words
+
+A confirmed sitting can be called off, and when it is, the reason matters more than the fact. **Cancel** on an incoming sitting opens a message box rather than cancelling straight away.
+
+**One message, three places.** What the preceptor types is what the abhyasi reads — in their notification, on their booking, and in the WhatsApp message. Nothing is paraphrased.
+
+**English and Hindi.** There are two boxes. Tapping one of the common reasons ("I am unwell…", "I am travelling…") fills both at once, already translated; anything typed by hand can be given its own Hindi. The frame around the message — the greeting, the date, the place, the kind of sitting — is written out in both languages either way. Left empty, the English words are repeated under the Hindi heading rather than machine-translated into something the preceptor did not say.
+
+**Then WhatsApp.** Once the sitting is cancelled the app offers the finished message with a **Send on WhatsApp** button. If the abhyasi has a phone number on their profile, the link opens **their** chat with the message ready to send — nothing to look up or paste. A bare ten-digit number is read as Indian (`+91`); anything already carrying a country code is left alone. The text is copied to the clipboard at the same time, so a phone that opens WhatsApp without the draft still has it to paste, and there is a **Copy** button for sending it anywhere else.
+
 ### Notifications
 
 The database writes a notification whenever something happens that someone should hear about:
@@ -403,7 +437,7 @@ The database writes a notification whenever something happens that someone shoul
 |---|---|
 | The preceptor | Someone requests a sitting — from their schedule or outside it |
 | The preceptor | An abhyasi cancels a sitting |
-| The abhyasi | Their request is confirmed, declined, or cancelled |
+| The abhyasi | Their request is confirmed, declined, or cancelled — a cancellation carrying the preceptor's own message, in English and Hindi |
 | The abhyasi | The preceptor proposes another time |
 
 A request notification carries the abhyasi's **mobile number**, so the preceptor can answer without opening the app first.
@@ -535,7 +569,7 @@ heartfulness-ams/
 └── package.json            The list of building blocks
 ```
 
-How the **"places left"** count stays correct: the database itself refuses any booking that would over-fill a slot, even if two people tap **Book** at the exact same moment. So a slot can never be double-booked beyond its capacity.
+How the **"places left"** count stays correct: the database itself counts the people already coming — each booking and everyone it brings — and refuses a request for a slot with none left, even if two people tap **Book** at the exact same moment. A party larger than the places left is the one thing it lets through, because that is a question for the preceptor; they are asked, and they answer.
 
 > This guard was broken until `004_fix_capacity_guard.sql`. The check counted the bookings already on a slot, but it ran with the booking person's own permissions — and those only let you see *your own* bookings. So the second person to book counted zero and was let in, and a one-place slot could take any number of people. If your database predates that migration, run it.
 

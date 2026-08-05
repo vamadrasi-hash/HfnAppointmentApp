@@ -21,7 +21,7 @@
 --    that function is deployed the table simply sits empty and pop-ups
 --    happen while the app is open.
 --
--- Run this ONCE in the Supabase SQL Editor, after 009.
+-- Run this ONCE in the Supabase SQL Editor, after 010.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -89,7 +89,9 @@ declare
   start_at    time;
   when_ts     timestamp;
   when_text   text;
+  party_text  text := '';
   is_open     boolean := (new.slot_id is null);
+  party       int := 1 + coalesce(new.accompanying_count, 0);
 begin
   select full_name, phone into abhy_name, abhy_phone
   from profiles where id = new.abhyasi_id;
@@ -105,6 +107,11 @@ begin
   when_text := to_char(when_ts, 'Dy DD Mon')
                || case when start_at is null then '' else to_char(when_ts, ', HH12:MI AM') end;
 
+  -- Someone coming alone is the ordinary case and needs no remark.
+  if party > 1 then
+    party_text := ' · ' || party || ' people';
+  end if;
+
   if tg_op = 'INSERT' then
     insert into notifications (profile_id, booking_id, kind, title, body)
     values (
@@ -112,7 +119,9 @@ begin
       new.id,
       case when is_open then 'open_request' else 'request' end,
       coalesce(abhy_name, 'Someone') || ' requested a sitting',
+      -- Their mobile rides along, so answering is one tap from the alert.
       when_text
+        || party_text
         || case when is_open then ' · outside your schedule' else '' end
         || case when abhy_phone is null then '' else ' · ' || abhy_phone end
     );
@@ -120,11 +129,9 @@ begin
     -- Auto-confirm means the abhyasi never waits, so tell them at once.
     if new.status = 'confirmed' then
       insert into notifications (profile_id, booking_id, kind, title, body)
-      values (
-        new.abhyasi_id, new.id, 'confirmed',
-        'Your sitting is confirmed',
-        when_text || ' · with ' || coalesce(precep_name, 'your preceptor')
-      );
+      values (new.abhyasi_id, new.id, 'confirmed',
+              'Your sitting is confirmed',
+              when_text || party_text || ' · with ' || coalesce(precep_name, 'your preceptor'));
     end if;
 
     return new;
@@ -139,7 +146,15 @@ begin
     insert into notifications (profile_id, booking_id, kind, title, body)
     values (new.abhyasi_id, new.id, 'confirmed',
             'Your sitting is confirmed',
-            when_text || ' · with ' || coalesce(precep_name, 'your preceptor'));
+            when_text || party_text || ' · with ' || coalesce(precep_name, 'your preceptor')
+            -- Fewer than were asked for: say so here rather than let them
+            -- find out at the door.
+            || case
+                 when new.requested_accompanying_count is not null
+                  and new.requested_accompanying_count > coalesce(new.accompanying_count, 0)
+                 then ' · ' || party || ' of the '
+                      || (1 + new.requested_accompanying_count) || ' you asked for'
+                 else '' end);
 
   elsif new.status = 'declined' then
     insert into notifications (profile_id, booking_id, kind, title, body)
@@ -160,12 +175,19 @@ begin
       insert into notifications (profile_id, booking_id, kind, title, body)
       values (new.preceptor_id, new.id, 'cancelled',
               coalesce(abhy_name, 'An abhyasi') || ' cancelled a sitting',
-              when_text);
+              when_text
+              || case when new.cancel_reason is null then ''
+                      else E'\n' || new.cancel_reason end);
     else
       insert into notifications (profile_id, booking_id, kind, title, body)
       values (new.abhyasi_id, new.id, 'cancelled',
               'Your sitting was cancelled',
-              coalesce(new.cancel_reason, when_text));
+              'आपकी सिटिंग रद्द कर दी गई है' || E'\n' || when_text
+              -- Exactly what the preceptor wrote, in both languages.
+              || case when new.cancel_reason is null then ''
+                      else E'\n' || new.cancel_reason end
+              || case when new.cancel_reason_hi is null then ''
+                      else E'\n' || new.cancel_reason_hi end);
     end if;
   end if;
 

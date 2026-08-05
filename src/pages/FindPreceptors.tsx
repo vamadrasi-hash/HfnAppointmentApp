@@ -9,6 +9,7 @@ import {
   CalendarPlus,
   CheckCircle2,
   MapPin,
+  Users,
   Search as SearchIcon,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
@@ -19,7 +20,8 @@ import {
   type AvailabilitySearch,
   type SlotFilters,
 } from '../lib/api'
-import type { AvailableSlot, PreceptorWithSlots } from '../lib/types'
+import { activeSessionTypes, defaultSessionTypeId, useMasterData } from '../lib/masterData'
+import type { AvailableSlot, PreceptorWithSlots, SessionType } from '../lib/types'
 import { Badge, Button, Card, Field, Select, PageLoader, EmptyState } from '../components/ui'
 import { ZoneCenterPicker, type ZoneCenterValue } from '../components/ZoneCenterPicker'
 import { PreceptorCard } from '../components/PreceptorCard'
@@ -34,6 +36,7 @@ import {
   prettyDate,
   formatTimeRange,
   dayShort,
+  peopleLabel,
   cx,
 } from '../lib/utils'
 
@@ -49,9 +52,15 @@ const EMPTY_RESULT: AvailabilitySearch = { onDate: [], next: null, areas: [] }
 const NEEDS_PHONE =
   'Add your mobile number in your profile first — the preceptor is shown it so they can reach you about the sitting.'
 
+// How many people one seeker can bring along. Ten is far past any real
+// sitting; the number is here so the dropdown has an end.
+const MAX_ACCOMPANYING = 10
+
 export default function FindPreceptors() {
   const { user, profile } = useAuth()
   const dates = useMemo(() => upcomingDates(14), [])
+  const { sessionTypes } = useMasterData()
+  const kinds = useMemo(() => activeSessionTypes(sessionTypes), [sessionTypes])
 
   const [date, setDate] = useState(dates[0].iso)
 
@@ -77,6 +86,14 @@ export default function FindPreceptors() {
   const [booking, setBooking] = useState(false)
   const [bookError, setBookError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+
+  // What kind of sitting, and who is coming along. Both apply whether the
+  // time was published or is being asked for.
+  const [sessionTypeId, setSessionTypeId] = useState('')
+  const [accompanying, setAccompanying] = useState(0)
+  // Asking for more people than the sitting holds: the seeker is told
+  // before the request goes, and says whether to ask anyway.
+  const [overCapacity, setOverCapacity] = useState(false)
 
   // Asking for a time that was never published
   const [askTarget, setAskTarget] = useState<PreceptorWithSlots | null>(null)
@@ -126,6 +143,12 @@ export default function FindPreceptors() {
     runSearch()
   }, [runSearch])
 
+  // The master data may still be loading when a sheet is opened, so take
+  // the default kind of sitting as soon as it arrives.
+  useEffect(() => {
+    if (!sessionTypeId && kinds.length > 0) setSessionTypeId(kinds[0].id)
+  }, [kinds, sessionTypeId])
+
   function toggleNearMe() {
     if (nearMe) {
       setNearMe(false)
@@ -172,15 +195,31 @@ export default function FindPreceptors() {
   function openBooking(slot: AvailableSlot) {
     setTarget(slot)
     setNote('')
+    setSessionTypeId(defaultSessionTypeId(sessionTypes))
+    setAccompanying(0)
+    setOverCapacity(false)
     setBookError(null)
   }
 
-  async function submitRequest() {
+  // The seeker counts too, so one person coming alone is a party of one.
+  const party = 1 + accompanying
+  const tooManyForSlot = !!target && party > target.remaining
+
+  async function submitRequest(askAnyway = false) {
     if (!target || !user) return
+    // Nothing else matters if the preceptor would have no way to answer.
     if (!hasPhone) {
       setBookError(NEEDS_PHONE)
       return
     }
+    // More people than places left. The preceptor decides that, so the
+    // request can still go — but only once the seeker knows.
+    if (tooManyForSlot && !askAnyway) {
+      setOverCapacity(true)
+      return
+    }
+    const over = tooManyForSlot
+    setOverCapacity(false)
     setBooking(true)
     setBookError(null)
     try {
@@ -190,12 +229,17 @@ export default function FindPreceptors() {
         // The slot carries its own date, which is not always the day being
         // looked at — "next available" can be further off.
         date: target.date,
+        sessionTypeId: sessionTypeId || undefined,
+        accompanying,
         note: note.trim() || undefined,
       })
       const who = target.preceptor.full_name
+      const when = prettyDate(target.date)
       setTarget(null)
       announce(
-        `Request sent to ${who} for ${prettyDate(target.date)}. You'll be notified once it's confirmed.`,
+        over
+          ? `Request sent to ${who} for ${when}, asking for ${peopleLabel(party)}. They will confirm how many can come.`
+          : `Request sent to ${who} for ${when}${party > 1 ? ` for ${peopleLabel(party)}` : ''}. You'll be notified once it's confirmed.`,
       )
       runSearch() // refresh remaining counts
     } catch (e: any) {
@@ -212,6 +256,9 @@ export default function FindPreceptors() {
     setAskStart('07:00')
     setAskEnd(addMinutesToTime('07:00', DEFAULT_SITTING_MINUTES))
     setAskNote('')
+    setSessionTypeId(defaultSessionTypeId(sessionTypes))
+    setAccompanying(0)
+    setOverCapacity(false)
     setBookError(null)
   }
 
@@ -240,13 +287,15 @@ export default function FindPreceptors() {
         date: askDate,
         startTime: askStart,
         endTime: askEnd || undefined,
+        sessionTypeId: sessionTypeId || undefined,
+        accompanying,
         note: askNote.trim() || undefined,
       })
       const who = askTarget.preceptor.full_name
       const when = askDate
       setAskTarget(null)
       announce(
-        `Request sent to ${who} for ${prettyDate(when)}. They will confirm the time and where to meet.`,
+        `Request sent to ${who} for ${prettyDate(when)}${party > 1 ? ` for ${peopleLabel(party)}` : ''}. They will confirm the time and where to meet.`,
       )
       runSearch()
     } catch (e: any) {
@@ -553,7 +602,7 @@ export default function FindPreceptors() {
             <Button variant="ghost" onClick={() => setTarget(null)} disabled={booking}>
               Cancel
             </Button>
-            <Button onClick={submitRequest} loading={booking} className="flex-1">
+            <Button onClick={() => submitRequest()} loading={booking} className="flex-1">
               Send request
             </Button>
           </>
@@ -576,6 +625,24 @@ export default function FindPreceptors() {
                 </Badge>
               </div>
             </div>
+
+            <SittingDetails
+              kinds={kinds}
+              sessionTypeId={sessionTypeId}
+              onSessionType={setSessionTypeId}
+              accompanying={accompanying}
+              onAccompanying={setAccompanying}
+            />
+
+            {/* Said here as well as in the pop-up, so the number of places
+                is visible while the seeker is still choosing. */}
+            {tooManyForSlot && (
+              <p className="rounded-xl border border-amber-100 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-800">
+                {target.preceptor.full_name} has room for {peopleLabel(target.remaining)} at this
+                sitting. You are asking for {peopleLabel(party)} — we will put that to them when you
+                send the request.
+              </p>
+            )}
 
             <label className="block">
               <span className="mb-1.5 block text-sm font-medium text-ink-700">
@@ -665,6 +732,15 @@ export default function FindPreceptors() {
               </label>
             </div>
 
+            <SittingDetails
+              kinds={kinds}
+              sessionTypeId={sessionTypeId}
+              onSessionType={setSessionTypeId}
+              accompanying={accompanying}
+              onAccompanying={setAccompanying}
+              accompanyingHint="They will confirm how many can come."
+            />
+
             <label className="block">
               <span className="mb-1.5 block text-sm font-medium text-ink-700">
                 Note for the preceptor <span className="text-ink-400">(optional)</span>
@@ -686,6 +762,101 @@ export default function FindPreceptors() {
           </div>
         )}
       </Modal>
+
+      {/* More people than the sitting holds. The preceptor answers that,
+          so the request may still go — the seeker just has to know what
+          they are agreeing to before it does. */}
+      <Modal
+        open={overCapacity && !!target}
+        onClose={() => (booking ? null : setOverCapacity(false))}
+        title="More people than places"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setOverCapacity(false)} disabled={booking}>
+              Change the number
+            </Button>
+            <Button onClick={() => submitRequest(true)} loading={booking} className="flex-1">
+              Ask anyway
+            </Button>
+          </>
+        }
+      >
+        {target && (
+          <div className="space-y-3 text-sm text-ink-600">
+            <p className="inline-flex items-start gap-2 rounded-xl border border-amber-100 bg-amber-50 px-3.5 py-2.5 text-amber-800">
+              <Users className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                {target.preceptor.full_name} allows{' '}
+                <span className="font-semibold">{peopleLabel(target.remaining)}</span> at this
+                sitting. You have chosen{' '}
+                <span className="font-semibold">{peopleLabel(party)}</span>.
+              </span>
+            </p>
+            <p>
+              We will ask {target.preceptor.full_name} for {peopleLabel(party)}. If they agree, all{' '}
+              {party} of you can come. If not, {peopleLabel(target.remaining)} will be approved and
+              you will be told which.
+            </p>
+          </div>
+        )}
+      </Modal>
+    </div>
+  )
+}
+
+// What kind of sitting, and who is coming along — the same two questions
+// whether the time was published or is being asked for.
+function SittingDetails({
+  kinds,
+  sessionTypeId,
+  onSessionType,
+  accompanying,
+  onAccompanying,
+  accompanyingHint,
+}: {
+  kinds: SessionType[]
+  sessionTypeId: string
+  onSessionType: (id: string) => void
+  accompanying: number
+  onAccompanying: (n: number) => void
+  accompanyingHint?: string
+}) {
+  const chosen = kinds.find((k) => k.id === sessionTypeId)
+  return (
+    <div className="space-y-3">
+      {kinds.length > 0 && (
+        <Field label="Type of session" hint={chosen?.description ?? undefined}>
+          <Select value={sessionTypeId} onChange={(e) => onSessionType(e.target.value)}>
+            {kinds.map((k) => (
+              <option key={k.id} value={k.id}>
+                {k.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      )}
+
+      <Field
+        label="How many people are accompanying you?"
+        hint={
+          accompanyingHint ??
+          (accompanying > 0
+            ? `${peopleLabel(1 + accompanying)} in all, counting you.`
+            : 'Leave at none if you are coming alone.')
+        }
+      >
+        <Select
+          value={String(accompanying)}
+          onChange={(e) => onAccompanying(Number(e.target.value))}
+        >
+          <option value="0">None — just me</option>
+          {Array.from({ length: MAX_ACCOMPANYING }, (_, i) => i + 1).map((n) => (
+            <option key={n} value={n}>
+              {n} {n === 1 ? 'person' : 'people'} with me ({n + 1} in all)
+            </option>
+          ))}
+        </Select>
+      </Field>
     </div>
   )
 }

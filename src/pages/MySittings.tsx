@@ -5,10 +5,13 @@ import {
   Inbox,
   Info,
   Check,
+  Copy,
   X,
   CalendarClock,
   CalendarPlus,
   Clock3,
+  MessageCircle,
+  Users,
   UserX,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
@@ -26,6 +29,9 @@ import { isApprovedPreceptor, isPendingPreceptor, isPreceptorRole } from '../lib
 import { Avatar, Badge, Button, Card, EmptyState, PageLoader, SectionTitle } from '../components/ui'
 import { Modal } from '../components/Modal'
 import { PlaceLine } from '../components/PlaceLine'
+import { CANCELLATION_REASONS, buildCancellationMessage } from '../lib/cancellation'
+import { HOME_PLACE_NAME, placeSummary } from '../lib/place'
+import { copyText, whatsappNumber, whatsappShareUrl } from '../lib/share'
 import {
   DEFAULT_SITTING_MINUTES,
   addMinutesToTime,
@@ -33,6 +39,8 @@ import {
   durationMinutes,
   formatTimeRange,
   formatTime,
+  partySize,
+  peopleLabel,
   prettyDate,
   isPastDate,
   statusLabel,
@@ -51,7 +59,8 @@ function SittingCard({
 }: {
   b: BookingDetail
   busy: boolean
-  onConfirm?: (b: BookingDetail) => void
+  /** `people` is how many the preceptor is letting come, when they trim a party. */
+  onConfirm?: (b: BookingDetail, people?: number) => void
   onDecline?: (b: BookingDetail) => void
   onPropose?: (b: BookingDetail) => void
   onCancel?: (b: BookingDetail) => void
@@ -65,6 +74,14 @@ function SittingCard({
   // so it carries its own time and no place.
   const isOpenRequest = !b.slot_id
   const times = bookingTimes(b)
+
+  // Who is coming. More than this sitting was opened for is a question
+  // for the preceptor rather than a refusal — they say how many may come.
+  const party = partySize(b)
+  const allowed = b.slot?.capacity ?? null
+  const tooMany = allowed != null && party > allowed
+  const asked = b.requested_accompanying_count == null ? null : b.requested_accompanying_count + 1
+  const trimmed = asked != null && asked > party
 
   return (
     <Card>
@@ -80,6 +97,19 @@ function SittingCard({
           <div className="mt-1 text-sm text-ink-500">
             {times && <span>{formatTimeRange(times.start, times.end)}</span>}
             <PlaceLine place={b.place} className="mt-0.5" />
+            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+              {b.session_type && <Badge tone="neutral">{b.session_type.name}</Badge>}
+              {party > 1 && (
+                <Badge tone={tooMany ? 'amber' : 'brand'}>
+                  <Users className="h-3 w-3" /> {peopleLabel(party)}
+                </Badge>
+              )}
+            </div>
+            {trimmed && (
+              <p className="mt-1 text-xs text-ink-400">
+                They asked for {peopleLabel(asked!)}; {peopleLabel(party)} approved.
+              </p>
+            )}
             {isOpenRequest && (
               <p className="mt-1 inline-flex items-center gap-1.5 rounded-lg bg-gold-100/60 px-2.5 py-1 text-xs text-gold-600">
                 <CalendarPlus className="h-3 w-3" />
@@ -114,11 +144,34 @@ function SittingCard({
         </div>
       </div>
 
+      {isRequested && onConfirm && tooMany && (
+        <div className="mt-3 rounded-xl border border-amber-100 bg-amber-50/70 p-3">
+          <p className="inline-flex items-start gap-2 text-sm text-amber-800">
+            <Users className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              This sitting is for {peopleLabel(allowed!)}, and{' '}
+              {b.abhyasi?.full_name ?? 'the abhyasi'} has asked to bring {peopleLabel(party)}. Let
+              them all come, or approve the {allowed} you opened.
+            </span>
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button onClick={() => onConfirm(b, party)} disabled={busy} className="flex-1">
+              <Check className="h-4 w-4" /> Confirm all {party}
+            </Button>
+            <Button variant="secondary" onClick={() => onConfirm(b, allowed!)} disabled={busy}>
+              Confirm {allowed} only
+            </Button>
+          </div>
+        </div>
+      )}
+
       {isRequested && onConfirm && (
         <div className="mt-3 flex flex-wrap gap-2">
-          <Button onClick={() => onConfirm(b)} disabled={busy} className="flex-1">
-            <Check className="h-4 w-4" /> Confirm
-          </Button>
+          {!tooMany && (
+            <Button onClick={() => onConfirm(b)} disabled={busy} className="flex-1">
+              <Check className="h-4 w-4" /> Confirm
+            </Button>
+          )}
           <Button variant="secondary" onClick={() => onPropose?.(b)} disabled={busy}>
             <CalendarClock className="h-4 w-4" /> New time
           </Button>
@@ -173,6 +226,15 @@ export default function MySittings() {
   const [altDate, setAltDate] = useState('')
   const [altStart, setAltStart] = useState('')
   const [altEnd, setAltEnd] = useState('')
+
+  // Cancelling a sitting: the message the preceptor writes, and then
+  // sending that same message on to the abhyasi over WhatsApp.
+  const [cancelTarget, setCancelTarget] = useState<BookingDetail | null>(null)
+  const [cancelEn, setCancelEn] = useState('')
+  const [cancelHi, setCancelHi] = useState('')
+  const [cancelling, setCancelling] = useState(false)
+  const [sendTarget, setSendTarget] = useState<{ b: BookingDetail; text: string } | null>(null)
+  const [copied, setCopied] = useState(false)
 
   const load = useCallback(async () => {
     if (!user) return
@@ -241,6 +303,83 @@ export default function MySittings() {
     )
   }
 
+  // ---- Cancelling, and saying why ------------------------------------
+  function openCancel(b: BookingDetail) {
+    setCancelEn('')
+    setCancelHi('')
+    setCancelTarget(b)
+  }
+
+  // Both boxes at once, so a preceptor who picks a common reason never has
+  // to write the Hindi themselves.
+  function pickReason(reason: { en: string; hi: string }) {
+    setCancelEn(reason.en)
+    setCancelHi(reason.hi)
+  }
+
+  /** The cancellation as one message — the same words the abhyasi is sent. */
+  function cancellationText(b: BookingDetail, en: string, hi: string): string {
+    const times = bookingTimes(b)
+    // This screen calls a home sitting "My home"; the message is read by
+    // the abhyasi, to whom it is the preceptor's.
+    const place = b.place
+      ? placeSummary({
+          ...b.place,
+          name: b.place.type === 'home' ? HOME_PLACE_NAME : b.place.name,
+        })
+      : null
+    return buildCancellationMessage({
+      seekerName: b.abhyasi?.full_name,
+      preceptorName: b.preceptor?.full_name ?? profile?.full_name,
+      date: b.booking_date,
+      startTime: times?.start,
+      endTime: times?.end,
+      placeName: place,
+      sessionType: b.session_type,
+      messageEn: en,
+      messageHi: hi,
+    })
+  }
+
+  async function submitCancel() {
+    if (!cancelTarget || !cancelEn.trim()) return
+    const b = cancelTarget
+    setCancelling(true)
+    setError(null)
+    try {
+      await cancelBooking(b.id, cancelEn, cancelHi)
+      // Straight on to sending it: the abhyasi has the notification
+      // already, and this is the message that reaches their phone.
+      setCancelTarget(null)
+      setCopied(false)
+      setSendTarget({ b, text: cancellationText(b, cancelEn, cancelHi) })
+      await load()
+    } catch (e: any) {
+      setError(e.message ?? 'Could not cancel the sitting.')
+      setCancelTarget(null)
+    } finally {
+      setCancelling(false)
+    }
+  }
+
+  async function copyCancellation() {
+    if (!sendTarget) return
+    setCopied(await copyText(sendTarget.text))
+    window.setTimeout(() => setCopied(false), 2500)
+  }
+
+  // The text goes to the clipboard as well as into the link, so a phone
+  // that opens WhatsApp without the draft still has it to paste.
+  async function sendOnWhatsApp() {
+    if (!sendTarget) return
+    await copyText(sendTarget.text)
+    window.open(
+      whatsappShareUrl(sendTarget.text, sendTarget.b.abhyasi?.phone),
+      '_blank',
+      'noopener,noreferrer',
+    )
+  }
+
   if (!canGiveSittings) {
     return (
       <div className="space-y-4">
@@ -293,10 +432,15 @@ export default function MySittings() {
   const upcomingDatesList = Array.from(new Set(upcoming.map((b) => b.booking_date)))
 
   const handlers = {
-    onConfirm: (b: BookingDetail) => run(b.id, () => confirmBooking(b.id)),
+    // `people` arrives when the preceptor trims a party to what the
+    // sitting holds; the abhyasi themselves is one of them.
+    onConfirm: (b: BookingDetail, people?: number) =>
+      run(b.id, () =>
+        confirmBooking(b.id, people == null ? {} : { accompanying: Math.max(0, people - 1) }),
+      ),
     onDecline: openDecline,
     onPropose: openPropose,
-    onCancel: (b: BookingDetail) => run(b.id, () => cancelBooking(b.id)),
+    onCancel: openCancel,
     onComplete: (b: BookingDetail) => run(b.id, () => markCompleted(b.id)),
     onNoShow: (b: BookingDetail) => run(b.id, () => markNoShow(b.id)),
   }
@@ -392,6 +536,132 @@ export default function MySittings() {
             className="w-full rounded-xl border border-brand-200 bg-white px-3.5 py-2.5 text-ink-900 placeholder:text-ink-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100"
           />
         </div>
+      </Modal>
+
+      {/* Cancelling: the message the abhyasi is sent, word for word */}
+      <Modal
+        open={!!cancelTarget}
+        onClose={() => (cancelling ? null : setCancelTarget(null))}
+        title="Cancel this sitting?"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setCancelTarget(null)} disabled={cancelling}>
+              Keep it
+            </Button>
+            <Button
+              variant="danger"
+              onClick={submitCancel}
+              loading={cancelling}
+              disabled={!cancelEn.trim()}
+              className="flex-1"
+            >
+              Cancel &amp; write to them
+            </Button>
+          </>
+        }
+      >
+        {cancelTarget && (
+          <div className="space-y-3">
+            <p className="text-sm text-ink-600">
+              {cancelTarget.abhyasi?.full_name ?? 'The abhyasi'} is told exactly what you write
+              here — in the app, and in the WhatsApp message you send next.
+            </p>
+
+            <div className="flex flex-wrap gap-1.5">
+              {CANCELLATION_REASONS.map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => pickReason(r)}
+                  className="rounded-full border border-brand-200 bg-white px-3 py-1 text-xs text-ink-600 transition-colors hover:border-brand-400 hover:bg-brand-50"
+                >
+                  {r.en}
+                </button>
+              ))}
+            </div>
+
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-medium text-ink-700">
+                Your message (English)
+              </span>
+              <textarea
+                value={cancelEn}
+                onChange={(e) => setCancelEn(e.target.value)}
+                rows={3}
+                placeholder="Why the sitting cannot happen"
+                className="w-full rounded-xl border border-brand-200 bg-white px-3.5 py-2.5 text-ink-900 placeholder:text-ink-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100"
+              />
+            </label>
+
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-medium text-ink-700">
+                वही संदेश हिंदी में <span className="text-ink-400">(optional)</span>
+              </span>
+              <textarea
+                value={cancelHi}
+                onChange={(e) => setCancelHi(e.target.value)}
+                rows={3}
+                placeholder="सिटिंग रद्द होने का कारण"
+                className="w-full rounded-xl border border-brand-200 bg-white px-3.5 py-2.5 text-ink-900 placeholder:text-ink-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100"
+              />
+              <span className="mt-1 block text-xs text-ink-400">
+                Tap a reason above to fill both boxes. Left empty, your English words are sent under
+                the Hindi heading rather than translated by guesswork.
+              </span>
+            </label>
+          </div>
+        )}
+      </Modal>
+
+      {/* Sending that message on WhatsApp */}
+      <Modal
+        open={!!sendTarget}
+        onClose={() => setSendTarget(null)}
+        title="Send it on WhatsApp"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setSendTarget(null)}>
+              Done
+            </Button>
+            <Button
+              onClick={sendOnWhatsApp}
+              className="flex-1 border-transparent bg-[#25D366] text-white shadow-soft hover:bg-[#1da851] active:bg-[#128C7E]"
+            >
+              <MessageCircle className="h-4 w-4" /> Send on WhatsApp
+            </Button>
+          </>
+        }
+      >
+        {sendTarget && (
+          <div className="space-y-3">
+            <p className="text-sm text-ink-600">
+              The sitting is cancelled and {sendTarget.b.abhyasi?.full_name ?? 'the abhyasi'} has
+              been notified. Here is the same message for WhatsApp, in English and Hindi.
+            </p>
+
+            <pre className="max-h-56 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-brand-100 bg-brand-50/50 px-3.5 py-2.5 font-sans text-xs leading-relaxed text-ink-600">
+              {sendTarget.text}
+            </pre>
+
+            {whatsappNumber(sendTarget.b.abhyasi?.phone) ? (
+              <p className="inline-flex items-center gap-1.5 text-xs text-ink-500">
+                <Phone className="h-3.5 w-3.5 text-brand-500" />
+                Opens the chat with {sendTarget.b.abhyasi?.phone}, message ready to send.
+              </p>
+            ) : (
+              <p className="text-xs text-amber-700">
+                {sendTarget.b.abhyasi?.full_name ?? 'This abhyasi'} has no phone number on their
+                profile, so WhatsApp will ask you which chat to send it to. The message is copied
+                either way.
+              </p>
+            )}
+
+            <Button variant="secondary" full onClick={copyCancellation}>
+              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              {copied ? 'Copied' : 'Copy the message'}
+            </Button>
+          </div>
+        )}
       </Modal>
 
       {/* Propose alternate modal */}

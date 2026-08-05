@@ -16,7 +16,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { upsertProfile, saveHomePlace } from '../lib/api'
-import { buildProfileShareText, whatsappShareUrl } from '../lib/share'
+import { buildProfileShareText, copyText, whatsappShareUrl } from '../lib/share'
 import {
   isAdmin as isAdminRole,
   isApprovedPreceptor,
@@ -128,13 +128,9 @@ export default function Profile() {
   }
 
   async function copyShareText() {
-    try {
-      await navigator.clipboard.writeText(shareText)
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 2000)
-    } catch {
-      /* an old browser without clipboard access — the text is on screen to select */
-    }
+    if (!(await copyText(shareText))) return
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 2000)
   }
 
   async function handleSignOut() {

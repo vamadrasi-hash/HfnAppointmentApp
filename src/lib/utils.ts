@@ -121,6 +121,17 @@ export function isUsablePhone(phone: string | null | undefined): boolean {
 
 export const PHONE_HELP = 'Please enter your mobile number — at least 10 digits.'
 
+// ---- How many are coming ---------------------------------------------
+// A booking can bring people with it, so it takes 1 + accompanying_count
+// places in the sitting. The seeker is always one of them.
+export function partySize(b: { accompanying_count?: number | null }): number {
+  return 1 + (b.accompanying_count ?? 0)
+}
+
+export function peopleLabel(n: number): string {
+  return n === 1 ? '1 person' : `${n} people`
+}
+
 // ---- Dates ------------------------------------------------------------
 export const ISO_DATE = 'yyyy-MM-dd'
 

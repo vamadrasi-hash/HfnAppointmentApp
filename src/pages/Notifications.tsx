@@ -229,7 +229,13 @@ export default function Notifications() {
                     </span>
                     <span className="shrink-0 text-[11px] text-ink-400">{ago(n.created_at)}</span>
                   </span>
-                  {n.body && <span className="mt-0.5 block text-sm text-ink-500">{n.body}</span>}
+                  {/* A cancellation carries the preceptor's own words, in
+                      English and Hindi, on their own lines. */}
+                  {n.body && (
+                    <span className="mt-0.5 block whitespace-pre-line text-sm text-ink-500">
+                      {n.body}
+                    </span>
+                  )}
                 </span>
               </Card>
             </Link>

@@ -61,6 +61,22 @@ export interface Heartspot {
   is_active: boolean
 }
 
+/**
+ * What kind of sitting is being asked for — master data, like zones and
+ * centers. Administrators maintain the list; a seeker picks one when they
+ * request a sitting.
+ */
+export interface SessionType {
+  id: string
+  name: string
+  /** The same name in Hindi, for the messages that go out in both. */
+  name_hi: string | null
+  description: string | null
+  sort_order: number
+  /** Unchecked rather than deleted, so past bookings keep their type. */
+  is_active: boolean
+}
+
 // Where a sitting happens.
 export type SittingPlaceType = 'heartspot' | 'home'
 
@@ -141,6 +157,15 @@ export interface Booking {
   booking_date: string // 'YYYY-MM-DD'
   status: BookingStatus
   note: string | null
+  /** What kind of sitting this is. See `session_types`. */
+  session_type_id?: string | null
+  /**
+   * How many people come *with* the seeker. The seeker themselves is
+   * always one more, so the booking takes 1 + this many places.
+   */
+  accompanying_count?: number
+  /** What was asked for, kept even when the preceptor approved fewer. */
+  requested_accompanying_count?: number | null
   /** Only when there is no slot: the time the abhyasi asked for. */
   requested_start_time?: string | null
   requested_end_time?: string | null
@@ -148,7 +173,10 @@ export interface Booking {
   requested_at?: string | null
   confirmed_at?: string | null
   decided_at?: string | null
+  /** The cancellation message, in the preceptor's own words. */
   cancel_reason?: string | null
+  /** The same message in Hindi. */
+  cancel_reason_hi?: string | null
   decline_reason?: string | null
   // preceptor-proposed alternate time
   alternate_date?: string | null
@@ -254,6 +282,8 @@ export interface BookingDetail extends Booking {
   preceptor: Pick<Profile, 'id' | 'full_name' | 'phone'> | null
   abhyasi: Pick<Profile, 'id' | 'full_name' | 'phone'> | null
   center: Pick<Center, 'id' | 'name' | 'city'> | null
+  /** What kind of sitting, resolved. Null on bookings made before the list existed. */
+  session_type: SessionType | null
   /** Where to go, ready to show. Null when the slot itself is gone. */
   place: ResolvedPlace | null
 }

@@ -14,6 +14,7 @@ import type {
   BookingDetail,
   PlaceDetails,
   ResolvedPlace,
+  SessionType,
   SittingPlaceType,
 } from './types'
 import { distanceKm } from './utils'
@@ -52,9 +53,25 @@ export async function getHeartspots(centerId?: string): Promise<Heartspot[]> {
   return data ?? []
 }
 
+/**
+ * What kind of sitting can be asked for. Inactive types stay in the list
+ * so a past booking still names its own type; the booking screens filter
+ * them out themselves.
+ */
+export async function getSessionTypes(): Promise<SessionType[]> {
+  const { data, error } = await supabase
+    .from('session_types')
+    .select('id, name, name_hi, description, sort_order, is_active')
+    .order('sort_order', { ascending: true })
+    .order('name', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as SessionType[]
+}
+
 // ---- Master data editing (admins only; RLS enforces that) ------------
 export type CenterInput = Omit<Center, 'id'>
 export type HeartspotInput = Omit<Heartspot, 'id'>
+export type SessionTypeInput = Omit<SessionType, 'id'>
 
 export async function createCenter(input: CenterInput): Promise<Center> {
   const { data, error } = await supabase.from('centers').insert(input).select('*').single()
@@ -100,6 +117,31 @@ export async function updateHeartspot(
 
 export async function deleteHeartspot(id: string): Promise<void> {
   const { error } = await supabase.from('heartspots').delete().eq('id', id)
+  if (error) throw error
+}
+
+export async function createSessionType(input: SessionTypeInput): Promise<SessionType> {
+  const { data, error } = await supabase.from('session_types').insert(input).select('*').single()
+  if (error) throw error
+  return data
+}
+
+export async function updateSessionType(
+  id: string,
+  patch: Partial<SessionTypeInput>,
+): Promise<SessionType> {
+  const { data, error } = await supabase
+    .from('session_types')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select('*')
+    .single()
+  if (error) throw error
+  return data
+}
+
+export async function deleteSessionType(id: string): Promise<void> {
+  const { error } = await supabase.from('session_types').delete().eq('id', id)
   if (error) throw error
 }
 
@@ -629,17 +671,24 @@ function groupByArea(
 // ------------------------------------------------------------------
 
 // Abhyasi asks for a sitting. It starts as 'requested' unless the
-// preceptor has auto_confirm on (the DB trigger handles that).
+// preceptor has auto_confirm on (the DB trigger handles that) — and a
+// party larger than the places left is never auto-confirmed, because
+// only the preceptor can say whether they may all come.
 export async function requestSitting(input: {
   slotId: string
   abhyasiId: string
   date: string
+  sessionTypeId?: string | null
+  /** How many come with them; the seeker themselves is one more. */
+  accompanying?: number
   note?: string
 }): Promise<void> {
   const { error } = await supabase.from('bookings').insert({
     slot_id: input.slotId,
     abhyasi_id: input.abhyasiId,
     booking_date: input.date,
+    session_type_id: input.sessionTypeId ?? null,
+    accompanying_count: input.accompanying ?? 0,
     note: input.note ?? null,
     status: 'requested',
   })
@@ -658,6 +707,8 @@ export async function requestOpenSitting(input: {
   date: string
   startTime: string
   endTime?: string
+  sessionTypeId?: string | null
+  accompanying?: number
   note?: string
 }): Promise<void> {
   const { error } = await supabase.from('bookings').insert({
@@ -667,6 +718,8 @@ export async function requestOpenSitting(input: {
     booking_date: input.date,
     requested_start_time: input.startTime,
     requested_end_time: input.endTime ?? null,
+    session_type_id: input.sessionTypeId ?? null,
+    accompanying_count: input.accompanying ?? 0,
     note: input.note ?? null,
     status: 'requested',
   })
@@ -674,11 +727,19 @@ export async function requestOpenSitting(input: {
 }
 
 // ---- Preceptor decisions on a request ----
-export async function confirmBooking(bookingId: string): Promise<void> {
-  const { error } = await supabase
-    .from('bookings')
-    .update({ status: 'confirmed' })
-    .eq('id', bookingId)
+/**
+ * Confirm a request. When more people were asked for than the sitting
+ * holds, the preceptor may confirm the whole party or trim it — passing
+ * `accompanying` here is that decision. Only they may change the number;
+ * the database enforces it.
+ */
+export async function confirmBooking(
+  bookingId: string,
+  opts: { accompanying?: number } = {},
+): Promise<void> {
+  const patch: Record<string, unknown> = { status: 'confirmed' }
+  if (opts.accompanying != null) patch.accompanying_count = opts.accompanying
+  const { error } = await supabase.from('bookings').update(patch).eq('id', bookingId)
   if (error) throw error
 }
 
@@ -737,11 +798,23 @@ export async function rejectAlternate(bookingId: string): Promise<void> {
   return cancelBooking(bookingId, 'Proposed alternate time was declined.')
 }
 
-// ---- Cancellation (either party) ----
-export async function cancelBooking(bookingId: string, reason?: string): Promise<void> {
+/**
+ * Cancel a sitting (either party). Whatever is written here is what the
+ * other person is told, word for word — the English message and, when a
+ * preceptor cancels, the same message in Hindi.
+ */
+export async function cancelBooking(
+  bookingId: string,
+  reason?: string,
+  reasonHi?: string,
+): Promise<void> {
   const { error } = await supabase
     .from('bookings')
-    .update({ status: 'cancelled', cancel_reason: reason?.trim() || null })
+    .update({
+      status: 'cancelled',
+      cancel_reason: reason?.trim() || null,
+      cancel_reason_hi: reasonHi?.trim() || null,
+    })
     .eq('id', bookingId)
   if (error) throw error
 }
@@ -806,6 +879,9 @@ function mapBooking(b: any, opts: { homeName?: string } = {}): BookingDetail {
     booking_date: b.booking_date,
     status: b.status,
     note: b.note,
+    session_type_id: b.session_type_id ?? null,
+    accompanying_count: b.accompanying_count ?? 0,
+    requested_accompanying_count: b.requested_accompanying_count ?? null,
     // Set only when there is no slot — the time the abhyasi asked for.
     requested_start_time: b.requested_start_time ?? null,
     requested_end_time: b.requested_end_time ?? null,
@@ -814,6 +890,7 @@ function mapBooking(b: any, opts: { homeName?: string } = {}): BookingDetail {
     confirmed_at: b.confirmed_at,
     decided_at: b.decided_at,
     cancel_reason: b.cancel_reason,
+    cancel_reason_hi: b.cancel_reason_hi ?? null,
     decline_reason: b.decline_reason,
     alternate_date: b.alternate_date,
     alternate_start_time: b.alternate_start_time,
@@ -825,15 +902,22 @@ function mapBooking(b: any, opts: { homeName?: string } = {}): BookingDetail {
     preceptor: b.slot?.preceptor ?? b.preceptor ?? null,
     center: b.slot?.center ?? null,
     abhyasi: b.abhyasi ?? null,
+    // PostgREST hands back a one-to-one embed as an object, but an
+    // unresolved relationship as an array.
+    session_type: Array.isArray(b.session_type)
+      ? (b.session_type[0] ?? null)
+      : (b.session_type ?? null),
     place: slot ? resolvePlace(slot, b.slot?.heartspot ?? null, b.slot?.center ?? null, opts) : null,
   }
 }
 
 const BOOKING_COLUMNS = `
   id, slot_id, abhyasi_id, preceptor_id, booking_date, status, note, created_at,
-  requested_at, confirmed_at, decided_at, cancel_reason, decline_reason,
+  requested_at, confirmed_at, decided_at, cancel_reason, cancel_reason_hi, decline_reason,
   requested_start_time, requested_end_time,
-  alternate_date, alternate_start_time, alternate_end_time, channel_used
+  session_type_id, accompanying_count, requested_accompanying_count,
+  alternate_date, alternate_start_time, alternate_end_time, channel_used,
+  session_type:session_types ( id, name, name_hi, description, sort_order, is_active )
 `
 
 // My bookings as the one who booked (abhyasi or preceptor-as-booker).
