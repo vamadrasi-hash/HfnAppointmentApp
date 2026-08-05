@@ -25,7 +25,7 @@ import {
   isRejectedPreceptor,
   roleLabel,
 } from '../lib/roles'
-import { Avatar, Badge, Button, Card, Field, Input } from '../components/ui'
+import { Avatar, Badge, Button, Card, Field, Input, Toggle } from '../components/ui'
 import { Modal } from '../components/Modal'
 import { ZoneCenterPicker, type ZoneCenterValue } from '../components/ZoneCenterPicker'
 import { LocationPicker, toPlaceValue, type PlaceValue } from '../components/LocationPicker'
@@ -49,6 +49,9 @@ export default function Profile() {
   const [home, setHome] = useState<PlaceValue>(toPlaceValue(profile?.home_place ?? {}))
 
   const [autoConfirm, setAutoConfirm] = useState(profile?.auto_confirm ?? false)
+  // Being open to times outside the schedule is also what puts a preceptor
+  // in "near me" on days they hold no slot.
+  const [openRequests, setOpenRequests] = useState(profile?.accepts_open_requests ?? false)
 
   const [copied, setCopied] = useState(false)
 
@@ -90,7 +93,9 @@ export default function Profile() {
         zone_id: place.zoneId || null,
         center_id: place.centerId || null,
         city: place.city,
-        ...(canGiveSittings ? { auto_confirm: autoConfirm } : {}),
+        ...(canGiveSittings
+          ? { auto_confirm: autoConfirm, accepts_open_requests: openRequests }
+          : {}),
       })
       setProfile(updated)
       setSavedOpen(true)
@@ -243,35 +248,30 @@ export default function Profile() {
         )}
       </div>
 
-      {/* Preceptor: auto-confirm preference */}
+      {/* Preceptor: how requests reach you */}
       {canGiveSittings && (
-        <Card>
-          <label className="flex cursor-pointer items-start justify-between gap-3">
-            <span>
-              <span className="block font-medium text-ink-800">Auto-confirm requests</span>
-              <span className="mt-0.5 block text-sm text-ink-500">
-                When on, sitting requests are confirmed instantly instead of waiting for you to
-                approve each one.
-              </span>
-            </span>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={autoConfirm}
-              onClick={() => setAutoConfirm((v) => !v)}
-              className={
-                'relative mt-1 inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ' +
-                (autoConfirm ? 'bg-brand-600' : 'bg-slate-300')
-              }
-            >
-              <span
-                className={
-                  'inline-block h-5 w-5 transform rounded-full bg-white transition-transform ' +
-                  (autoConfirm ? 'translate-x-5' : 'translate-x-0.5')
-                }
-              />
-            </button>
-          </label>
+        <Card className="space-y-4">
+          <p className="text-sm font-semibold text-ink-700">Requests</p>
+
+          <Toggle
+            checked={autoConfirm}
+            onChange={setAutoConfirm}
+            label="Auto-confirm requests"
+            hint="When on, sitting requests on your published times are confirmed instantly instead of waiting for you to approve each one."
+          />
+
+          <div className="border-t border-brand-50 pt-4">
+            <Toggle
+              checked={openRequests}
+              onChange={setOpenRequests}
+              label="Accept requests outside my schedule"
+              hint="When on, abhyasis can ask you for a time you haven’t published — and you appear in “near me” even on days you hold no slot. These always wait for you to accept; auto-confirm does not apply to them."
+            />
+          </div>
+
+          <p className="text-xs text-ink-400">
+            Both take effect when you save, below.
+          </p>
         </Card>
       )}
 

@@ -4,9 +4,12 @@ import type {
   Center,
   Heartspot,
   Profile,
+  AppNotification,
+  AreaGroup,
   PreceptorStatus,
   AvailabilitySlot,
   AvailableSlot,
+  CenterGroup,
   PreceptorWithSlots,
   BookingDetail,
   PlaceDetails,
@@ -15,7 +18,7 @@ import type {
 } from './types'
 import { distanceKm } from './utils'
 import { HOME_PLACE_NAME, MY_HOME_PLACE_NAME, resolvePlace } from './place'
-import { centerFullLabel } from './centers'
+import { NO_CITY_GROUP, centerFullLabel, centerGroup } from './centers'
 
 // ------------------------------------------------------------------
 // MASTER DATA
@@ -271,16 +274,25 @@ export async function deleteSlot(id: string): Promise<void> {
 // FINDING SLOTS TO BOOK (abhyasi / preceptor as booker)
 // ------------------------------------------------------------------
 export interface SlotFilters {
-  date: string // ISO yyyy-MM-dd
+  date: string // ISO yyyy-MM-dd — the day the seeker picked
   zoneId?: string
   centerId?: string
   fromTime?: string // 'HH:MM' inclusive
   toTime?: string // 'HH:MM' inclusive
   origin?: { lat: number; lng: number } | null // for "near me" sorting
   includeFull?: boolean
+  /**
+   * How far ahead to look for "the next available time" and for the
+   * by-area list. The search reads one span of days in a single round
+   * trip, so this costs nothing extra per day.
+   */
+  windowStart?: string
+  windowDays?: number
 }
 
 interface RawSlotRow {
+  /** The real date this weekly slot falls on. */
+  slot_date: string
   slot_id: string
   preceptor_id: string
   preceptor_name: string
@@ -328,70 +340,126 @@ function placeFromRow(r: RawSlotRow): ResolvedPlace {
   }
 }
 
-export async function findPreceptors(
-  filters: SlotFilters,
-): Promise<PreceptorWithSlots[]> {
-  const { data, error } = await supabase.rpc('find_available_slots', {
-    target_date: filters.date,
-  })
-  if (error) throw error
+// A preceptor who takes requests outside their schedule. They hold no
+// slot to be found through, so the search asks for them separately.
+interface RawOpenPreceptorRow {
+  preceptor_id: string
+  preceptor_name: string
+  preceptor_phone: string | null
+  center_id: string | null
+  center_name: string | null
+  center_city: string | null
+  center_zone_id: string | null
+  center_lat: number | null
+  center_lng: number | null
+  // Rounded to about a kilometre by the RPC — enough to sort by, never
+  // enough to point at a house.
+  home_lat: number | null
+  home_lng: number | null
+}
 
-  const rows = (data ?? []) as RawSlotRow[]
+function toAvailableSlot(r: RawSlotRow): AvailableSlot {
+  return {
+    id: r.slot_id,
+    date: r.slot_date,
+    preceptor_id: r.preceptor_id,
+    center_id: r.center_id,
+    day_of_week: r.day_of_week,
+    start_time: r.start_time,
+    end_time: r.end_time,
+    capacity: r.capacity,
+    is_active: true,
+    note: r.note,
+    place_type: r.place_type,
+    place: placeFromRow(r),
+    preceptor: { id: r.preceptor_id, full_name: r.preceptor_name, phone: r.preceptor_phone },
+    center: r.center_id
+      ? {
+          id: r.center_id,
+          name: r.center_name ?? '',
+          city: r.center_city,
+          latitude: r.center_lat,
+          longitude: r.center_lng,
+        }
+      : null,
+    booked_count: Number(r.booked_count),
+    remaining: r.capacity - Number(r.booked_count),
+  }
+}
 
-  // Apply the dropdown / time filters in the app.
-  const filtered = rows.filter((r) => {
+/**
+ * Everything the "find a sitting" screen asks in one round trip:
+ *
+ *  - `onDate`  who is open on the day the seeker picked;
+ *  - `next`    the soonest open time anywhere in the window, so a seeker
+ *              who has picked no slot is still told when the next one is
+ *              and whose it is;
+ *  - `areas`   every available preceptor grouped by area and center — the
+ *              answer to "nobody is near me".
+ */
+export interface AvailabilitySearch {
+  onDate: PreceptorWithSlots[]
+  next: AvailableSlot | null
+  areas: AreaGroup[]
+}
+
+const DEAD_END = Number.POSITIVE_INFINITY
+
+export async function searchAvailability(filters: SlotFilters): Promise<AvailabilitySearch> {
+  const windowStart = filters.windowStart ?? filters.date
+  const windowDays = filters.windowDays ?? 14
+
+  const [slotRes, openRes] = await Promise.all([
+    supabase.rpc('find_available_slots_range', {
+      start_date: windowStart,
+      days: windowDays,
+    }),
+    supabase.rpc('find_open_request_preceptors'),
+  ])
+  if (slotRes.error) throw slotRes.error
+  if (openRes.error) throw openRes.error
+
+  const rows = (slotRes.data ?? []) as RawSlotRow[]
+  const openRows = (openRes.data ?? []) as RawOpenPreceptorRow[]
+
+  // Zone and center narrow *who*, so they apply everywhere. Time of day
+  // narrows *when*, so it only applies to the slots themselves.
+  const inPlace = (r: { center_zone_id: string | null; center_id: string | null }) => {
     if (filters.zoneId && r.center_zone_id !== filters.zoneId) return false
     if (filters.centerId && r.center_id !== filters.centerId) return false
-    if (filters.fromTime && r.start_time.slice(0, 5) < filters.fromTime) return false
-    if (filters.toTime && r.start_time.slice(0, 5) > filters.toTime) return false
     return true
-  })
+  }
+  const inTimeBand = (r: RawSlotRow) => {
+    const start = r.start_time.slice(0, 5)
+    if (filters.fromTime && start < filters.fromTime) return false
+    if (filters.toTime && start > filters.toTime) return false
+    return true
+  }
 
-  // Group by preceptor and shape into AvailableSlot.
+  const usable = rows.filter(
+    (r) =>
+      inPlace(r) &&
+      inTimeBand(r) &&
+      (filters.includeFull || r.capacity - Number(r.booked_count) > 0),
+  )
+
+  // Measure to where the sitting actually is, falling back to the center
+  // when the place itself carries no coordinates. A home sitting's
+  // coordinate is rounded to ~1 km, so it is reported as approximate
+  // rather than quoted to one decimal place.
+  const distanceOf = (lat: number | null, lng: number | null): number | null =>
+    filters.origin && lat != null && lng != null
+      ? distanceKm(filters.origin.lat, filters.origin.lng, lat, lng)
+      : null
+
   const byPreceptor = new Map<string, PreceptorWithSlots>()
+  const openIds = new Set(openRows.map((r) => r.preceptor_id))
 
-  for (const r of filtered) {
-    const remaining = r.capacity - Number(r.booked_count)
-    if (!filters.includeFull && remaining <= 0) continue
-
-    const slot: AvailableSlot = {
-      id: r.slot_id,
-      preceptor_id: r.preceptor_id,
-      center_id: r.center_id,
-      day_of_week: r.day_of_week,
-      start_time: r.start_time,
-      end_time: r.end_time,
-      capacity: r.capacity,
-      is_active: true,
-      note: r.note,
-      place_type: r.place_type,
-      place: placeFromRow(r),
-      preceptor: { id: r.preceptor_id, full_name: r.preceptor_name, phone: r.preceptor_phone },
-      center: r.center_id
-        ? {
-            id: r.center_id,
-            name: r.center_name ?? '',
-            city: r.center_city,
-            latitude: r.center_lat,
-            longitude: r.center_lng,
-          }
-        : null,
-      booked_count: Number(r.booked_count),
-      remaining,
-    }
-
-    if (!byPreceptor.has(r.preceptor_id)) {
-      // Measure to where the sitting actually is, falling back to the
-      // center when the place itself carries no coordinates. A home
-      // sitting's coordinate is rounded to ~1 km, so say so rather than
-      // quoting a distance to one decimal place.
-      const lat = r.place_lat ?? r.center_lat
-      const lng = r.place_lng ?? r.center_lng
-      let distance: number | null = null
-      if (filters.origin && lat != null && lng != null) {
-        distance = distanceKm(filters.origin.lat, filters.origin.lng, lat, lng)
-      }
-      byPreceptor.set(r.preceptor_id, {
+  for (const r of usable) {
+    let entry = byPreceptor.get(r.preceptor_id)
+    if (!entry) {
+      const distance = distanceOf(r.place_lat ?? r.center_lat, r.place_lng ?? r.center_lng)
+      entry = {
         preceptor: { id: r.preceptor_id, full_name: r.preceptor_name, phone: r.preceptor_phone },
         center: r.center_id
           ? { id: r.center_id, name: r.center_name ?? '', city: r.center_city }
@@ -399,27 +467,138 @@ export async function findPreceptors(
         distanceKm: distance,
         distanceApprox: distance != null && r.place_type === 'home' && r.place_lat != null,
         slots: [],
+        openToRequests: openIds.has(r.preceptor_id),
+        nextAvailable: null,
+      }
+      byPreceptor.set(r.preceptor_id, entry)
+    }
+
+    const slot = toAvailableSlot(r)
+    if (r.slot_date === filters.date) entry.slots.push(slot)
+
+    // The rows come back ordered by date then time, so the first one seen
+    // is the soonest.
+    if (!entry.nextAvailable) entry.nextAvailable = slot
+  }
+
+  // Preceptors who publish nothing (or nothing left) but can still be
+  // asked. Without this they would never appear in a search at all.
+  for (const r of openRows) {
+    if (byPreceptor.has(r.preceptor_id)) continue
+    if (!inPlace(r)) continue
+    const distance = distanceOf(r.home_lat ?? r.center_lat, r.home_lng ?? r.center_lng)
+    byPreceptor.set(r.preceptor_id, {
+      preceptor: { id: r.preceptor_id, full_name: r.preceptor_name, phone: r.preceptor_phone },
+      center: r.center_id
+        ? { id: r.center_id, name: r.center_name ?? '', city: r.center_city }
+        : null,
+      distanceKm: distance,
+      distanceApprox: distance != null && r.home_lat != null,
+      slots: [],
+      openToRequests: true,
+      nextAvailable: null,
+    })
+  }
+
+  const everyone = Array.from(byPreceptor.values())
+  everyone.forEach((p) => p.slots.sort((a, b) => a.start_time.localeCompare(b.start_time)))
+
+  // Sort: by distance when "near me" is on, otherwise by name. Anyone we
+  // cannot place goes last either way.
+  const byDistanceThenName = (a: PreceptorWithSlots, b: PreceptorWithSlots) => {
+    if (filters.origin) {
+      const da = a.distanceKm ?? DEAD_END
+      const db = b.distanceKm ?? DEAD_END
+      if (da !== db) return da - db
+    }
+    return a.preceptor.full_name.localeCompare(b.preceptor.full_name)
+  }
+
+  const onDate = everyone
+    .filter((p) => p.slots.length > 0 || p.openToRequests)
+    .sort(byDistanceThenName)
+
+  // The soonest open time anywhere, nearest first when two fall together.
+  let next: AvailableSlot | null = null
+  let nextOwner: PreceptorWithSlots | null = null
+  for (const p of everyone) {
+    const cand = p.nextAvailable
+    if (!cand) continue
+    if (!next) {
+      next = cand
+      nextOwner = p
+      continue
+    }
+    const byWhen =
+      cand.date.localeCompare(next.date) || cand.start_time.localeCompare(next.start_time)
+    if (byWhen < 0) {
+      next = cand
+      nextOwner = p
+    } else if (byWhen === 0 && (p.distanceKm ?? DEAD_END) < (nextOwner?.distanceKm ?? DEAD_END)) {
+      next = cand
+      nextOwner = p
+    }
+  }
+
+  return { onDate, next, areas: groupByArea(everyone, byDistanceThenName) }
+}
+
+/**
+ * Everyone who is free somewhere in the window, gathered under their area
+ * (the center's city) and then their center. This is what a seeker sees
+ * when nobody is available near them: the wider picture, still ordered so
+ * the closest area comes first.
+ */
+function groupByArea(
+  preceptors: PreceptorWithSlots[],
+  compare: (a: PreceptorWithSlots, b: PreceptorWithSlots) => number,
+): AreaGroup[] {
+  const available = preceptors.filter((p) => p.nextAvailable || p.openToRequests)
+
+  const areas = new Map<string, Map<string, CenterGroup>>()
+  for (const p of available) {
+    const area = p.center ? centerGroup(p.center) : NO_CITY_GROUP
+    const centerId = p.center?.id ?? null
+    const key = centerId ?? '—'
+    if (!areas.has(area)) areas.set(area, new Map())
+    const centers = areas.get(area)!
+    if (!centers.has(key)) {
+      centers.set(key, {
+        centerId,
+        centerName: p.center?.name ?? 'No center recorded',
+        preceptors: [],
       })
     }
-    byPreceptor.get(r.preceptor_id)!.slots.push(slot)
+    centers.get(key)!.preceptors.push(p)
   }
 
-  const result = Array.from(byPreceptor.values())
-  result.forEach((p) =>
-    p.slots.sort((a, b) => a.start_time.localeCompare(b.start_time)),
-  )
+  const best = (list: PreceptorWithSlots[]) =>
+    list.reduce((m, p) => Math.min(m, p.distanceKm ?? DEAD_END), DEAD_END)
 
-  // Sort: by distance when "near me" is on, otherwise by preceptor name.
-  if (filters.origin) {
-    result.sort((a, b) => {
-      if (a.distanceKm == null) return 1
-      if (b.distanceKm == null) return -1
-      return a.distanceKm - b.distanceKm
+  return Array.from(areas.entries())
+    .map(([area, centers]) => {
+      const groups = Array.from(centers.values())
+      groups.forEach((g) => g.preceptors.sort(compare))
+      groups.sort(
+        (a, b) =>
+          best(a.preceptors) - best(b.preceptors) ||
+          a.centerName.localeCompare(b.centerName, undefined, { sensitivity: 'base' }),
+      )
+      return {
+        area,
+        centers: groups,
+        preceptorCount: groups.reduce((n, g) => n + g.preceptors.length, 0),
+      }
     })
-  } else {
-    result.sort((a, b) => a.preceptor.full_name.localeCompare(b.preceptor.full_name))
-  }
-  return result
+    .sort((a, b) => {
+      // Centers with no city recorded collect at the bottom.
+      if (a.area === NO_CITY_GROUP) return 1
+      if (b.area === NO_CITY_GROUP) return -1
+      const da = Math.min(...a.centers.map((c) => best(c.preceptors)))
+      const db = Math.min(...b.centers.map((c) => best(c.preceptors)))
+      if (da !== db) return da - db
+      return a.area.localeCompare(b.area, undefined, { sensitivity: 'base' })
+    })
 }
 
 // ------------------------------------------------------------------
@@ -438,6 +617,33 @@ export async function requestSitting(input: {
     slot_id: input.slotId,
     abhyasi_id: input.abhyasiId,
     booking_date: input.date,
+    note: input.note ?? null,
+    status: 'requested',
+  })
+  if (error) throw error
+}
+
+/**
+ * Asking for a time the preceptor never published. Only preceptors who
+ * opted in accept these — the database checks that rather than trusting
+ * the screen — and they are never auto-confirmed: a time nobody published
+ * is always the preceptor's to accept by hand.
+ */
+export async function requestOpenSitting(input: {
+  preceptorId: string
+  abhyasiId: string
+  date: string
+  startTime: string
+  endTime?: string
+  note?: string
+}): Promise<void> {
+  const { error } = await supabase.from('bookings').insert({
+    slot_id: null,
+    preceptor_id: input.preceptorId,
+    abhyasi_id: input.abhyasiId,
+    booking_date: input.date,
+    requested_start_time: input.startTime,
+    requested_end_time: input.endTime ?? null,
     note: input.note ?? null,
     status: 'requested',
   })
@@ -559,6 +765,9 @@ function mapBooking(b: any, opts: { homeName?: string } = {}): BookingDetail {
     booking_date: b.booking_date,
     status: b.status,
     note: b.note,
+    // Set only when there is no slot — the time the abhyasi asked for.
+    requested_start_time: b.requested_start_time ?? null,
+    requested_end_time: b.requested_end_time ?? null,
     created_at: b.created_at,
     requested_at: b.requested_at,
     confirmed_at: b.confirmed_at,
@@ -570,12 +779,21 @@ function mapBooking(b: any, opts: { homeName?: string } = {}): BookingDetail {
     alternate_end_time: b.alternate_end_time,
     channel_used: b.channel_used,
     slot,
-    preceptor: b.slot?.preceptor ?? null,
+    // A request made outside the schedule has no slot to reach the
+    // preceptor through, so that query embeds them directly as well.
+    preceptor: b.slot?.preceptor ?? b.preceptor ?? null,
     center: b.slot?.center ?? null,
     abhyasi: b.abhyasi ?? null,
     place: slot ? resolvePlace(slot, b.slot?.heartspot ?? null, b.slot?.center ?? null, opts) : null,
   }
 }
+
+const BOOKING_COLUMNS = `
+  id, slot_id, abhyasi_id, preceptor_id, booking_date, status, note, created_at,
+  requested_at, confirmed_at, decided_at, cancel_reason, decline_reason,
+  requested_start_time, requested_end_time,
+  alternate_date, alternate_start_time, alternate_end_time, channel_used
+`
 
 // My bookings as the one who booked (abhyasi or preceptor-as-booker).
 export async function getMyBookings(userId: string): Promise<BookingDetail[]> {
@@ -583,10 +801,9 @@ export async function getMyBookings(userId: string): Promise<BookingDetail[]> {
     .from('bookings')
     .select(
       `
-      id, slot_id, abhyasi_id, preceptor_id, booking_date, status, note, created_at,
-      requested_at, confirmed_at, decided_at, cancel_reason, decline_reason,
-      alternate_date, alternate_start_time, alternate_end_time, channel_used,
-      slot:availability_slots ( ${BOOKING_SLOT_COLUMNS} )
+      ${BOOKING_COLUMNS},
+      slot:availability_slots ( ${BOOKING_SLOT_COLUMNS} ),
+      preceptor:profiles!bookings_preceptor_id_fkey ( id, full_name, phone )
     `,
     )
     .eq('abhyasi_id', userId)
@@ -596,32 +813,61 @@ export async function getMyBookings(userId: string): Promise<BookingDetail[]> {
   return (data ?? []).map((b) => mapBooking(b))
 }
 
-// Incoming bookings on MY slots (preceptor view of who is coming).
+// Sittings people have asked ME for (preceptor view of who is coming).
+// Every booking carries `preceptor_id`, including the ones asked outside
+// the schedule, which have no slot to be found through.
 export async function getMySittings(preceptorId: string): Promise<BookingDetail[]> {
-  // First find my slot ids, then the bookings on them.
-  const { data: slots, error: slotErr } = await supabase
-    .from('availability_slots')
-    .select('id')
-    .eq('preceptor_id', preceptorId)
-  if (slotErr) throw slotErr
-  const slotIds = (slots ?? []).map((s) => s.id)
-  if (slotIds.length === 0) return []
-
   const { data, error } = await supabase
     .from('bookings')
     .select(
       `
-      id, slot_id, abhyasi_id, preceptor_id, booking_date, status, note, created_at,
-      requested_at, confirmed_at, decided_at, cancel_reason, decline_reason,
-      alternate_date, alternate_start_time, alternate_end_time, channel_used,
+      ${BOOKING_COLUMNS},
       slot:availability_slots ( ${BOOKING_SLOT_COLUMNS} ),
-      abhyasi:profiles ( id, full_name, phone )
+      abhyasi:profiles!bookings_abhyasi_id_fkey ( id, full_name, phone )
     `,
     )
-    .in('slot_id', slotIds)
+    .eq('preceptor_id', preceptorId)
     .order('booking_date', { ascending: true })
   if (error) throw error
 
   // This is the preceptor's own screen, so a home sitting is *their* home.
   return (data ?? []).map((b) => mapBooking(b, { homeName: MY_HOME_PLACE_NAME }))
+}
+
+// ------------------------------------------------------------------
+// NOTIFICATIONS — the small inbox the database writes for each person
+// ------------------------------------------------------------------
+export async function getNotifications(
+  profileId: string,
+  limit = 50,
+): Promise<AppNotification[]> {
+  const { data, error } = await supabase
+    .from('notifications')
+    .select('id, booking_id, kind, title, body, read_at, created_at')
+    .eq('profile_id', profileId)
+    .order('created_at', { ascending: false })
+    .limit(limit)
+  if (error) throw error
+  return (data ?? []) as AppNotification[]
+}
+
+export async function countUnreadNotifications(profileId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('notifications')
+    .select('id', { count: 'exact', head: true })
+    .eq('profile_id', profileId)
+    .is('read_at', null)
+  if (error) throw error
+  return count ?? 0
+}
+
+export async function markNotificationsRead(profileId: string, ids?: string[]): Promise<void> {
+  let q = supabase
+    .from('notifications')
+    .update({ read_at: new Date().toISOString() })
+    .eq('profile_id', profileId)
+    .is('read_at', null)
+  if (ids?.length) q = q.in('id', ids)
+  const { error } = await q
+  if (error) throw error
 }

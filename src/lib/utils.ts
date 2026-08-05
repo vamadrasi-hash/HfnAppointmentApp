@@ -61,6 +61,49 @@ export function formatTimeRange(start: string, end: string): string {
   return `${formatTime(start)} – ${formatTime(end)}`
 }
 
+// A sitting is half an hour unless someone says otherwise — the schedule
+// form uses this to move the end time along with the start.
+export const DEFAULT_SITTING_MINUTES = 30
+
+export function timeToMinutes(time: string): number {
+  const [h, m] = time.split(':')
+  return Number(h) * 60 + Number(m ?? 0)
+}
+
+export function minutesToTime(mins: number): string {
+  // Wrap rather than run past midnight, so 23:50 + 30 reads as 00:20.
+  const wrapped = ((mins % 1440) + 1440) % 1440
+  const h = Math.floor(wrapped / 60)
+  const m = wrapped % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
+export function addMinutesToTime(time: string, mins: number): string {
+  return minutesToTime(timeToMinutes(time) + mins)
+}
+
+/** How long a slot lasts, or 0 if the end is not after the start. */
+export function durationMinutes(start: string, end: string): number {
+  return Math.max(0, timeToMinutes(end) - timeToMinutes(start))
+}
+
+// When a booking has a slot, the slot says when it is. A request made
+// outside the schedule carries its own time instead.
+export function bookingTimes(b: {
+  slot?: { start_time: string; end_time: string } | null
+  requested_start_time?: string | null
+  requested_end_time?: string | null
+}): { start: string; end: string } | null {
+  if (b.slot) return { start: b.slot.start_time, end: b.slot.end_time }
+  if (b.requested_start_time) {
+    return {
+      start: b.requested_start_time,
+      end: b.requested_end_time ?? addMinutesToTime(b.requested_start_time, DEFAULT_SITTING_MINUTES),
+    }
+  }
+  return null
+}
+
 // ---- Dates ------------------------------------------------------------
 export const ISO_DATE = 'yyyy-MM-dd'
 

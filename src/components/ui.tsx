@@ -126,6 +126,52 @@ export function Select({ className, children, ...rest }: SelectProps) {
   )
 }
 
+// ---------------- Toggle ----------------
+// A labelled on/off switch. `onChange` may save straight away (the
+// dashboard does) or just hold the value until Save (the profile does).
+export function Toggle({
+  checked,
+  onChange,
+  label,
+  hint,
+  disabled,
+}: {
+  checked: boolean
+  onChange: (next: boolean) => void
+  label: ReactNode
+  hint?: ReactNode
+  disabled?: boolean
+}) {
+  return (
+    <label className={cx('flex items-start justify-between gap-3', !disabled && 'cursor-pointer')}>
+      <span>
+        <span className="block font-medium text-ink-800">{label}</span>
+        {hint && <span className="mt-0.5 block text-sm text-ink-500">{hint}</span>}
+      </span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        className={cx(
+          'relative mt-1 inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:ring-offset-2',
+          checked ? 'bg-brand-600' : 'bg-slate-300',
+          disabled && 'opacity-50',
+        )}
+      >
+        <span
+          className={cx(
+            'inline-block h-5 w-5 transform rounded-full bg-white transition-transform',
+            checked ? 'translate-x-5' : 'translate-x-0.5',
+          )}
+        />
+      </button>
+    </label>
+  )
+}
+
 // ---------------- Badge ----------------
 type BadgeTone = 'brand' | 'gold' | 'neutral' | 'green' | 'red' | 'amber'
 const badgeTones: Record<BadgeTone, string> = {

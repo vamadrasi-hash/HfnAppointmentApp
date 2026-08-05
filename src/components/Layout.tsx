@@ -1,12 +1,15 @@
 import { Outlet, useNavigate } from 'react-router-dom'
+import { Bell } from 'lucide-react'
 import { BottomNav } from './BottomNav'
 import { useAuth } from '../context/AuthContext'
+import { useUnreadNotifications } from '../lib/notifications'
 import { Avatar } from './ui'
 import { HeartfulnessMark, HeartfulnessWordmark } from './Logo'
 
 export function Layout() {
-  const { profile } = useAuth()
+  const { user, profile } = useAuth()
   const navigate = useNavigate()
+  const { count: unread } = useUnreadNotifications(user?.id)
 
   return (
     <div className="mx-auto flex min-h-full max-w-md flex-col">
@@ -29,9 +32,23 @@ export function Layout() {
             </span>
           </button>
           {profile && (
-            <button onClick={() => navigate('/profile')} aria-label="Your profile">
-              <Avatar name={profile.full_name} className="h-9 w-9 text-sm" />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => navigate('/notifications')}
+                className="relative rounded-lg p-2 text-ink-500 hover:bg-brand-50 hover:text-brand-700"
+                aria-label={unread > 0 ? `Notifications (${unread} unread)` : 'Notifications'}
+              >
+                <Bell className="h-5 w-5" />
+                {unread > 0 && (
+                  <span className="absolute right-0.5 top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand-600 px-1 text-[10px] font-semibold leading-none text-white">
+                    {unread > 9 ? '9+' : unread}
+                  </span>
+                )}
+              </button>
+              <button onClick={() => navigate('/profile')} aria-label="Your profile">
+                <Avatar name={profile.full_name} className="h-9 w-9 text-sm" />
+              </button>
+            </div>
           )}
         </div>
       </header>

@@ -11,6 +11,7 @@ import FindPreceptors from './pages/FindPreceptors'
 import BookingsList from './pages/BookingsList'
 import Availability from './pages/Availability'
 import MySittings from './pages/MySittings'
+import Notifications from './pages/Notifications'
 import Profile from './pages/Profile'
 import AdminMasterData from './pages/AdminMasterData'
 import AdminPreceptors from './pages/AdminPreceptors'
@@ -43,6 +44,7 @@ export default function App() {
         <Route path="/bookings" element={<BookingsList />} />
         <Route path="/availability" element={<Availability />} />
         <Route path="/sittings" element={<MySittings />} />
+        <Route path="/notifications" element={<Notifications />} />
         <Route path="/profile" element={<Profile />} />
         <Route
           path="/admin"

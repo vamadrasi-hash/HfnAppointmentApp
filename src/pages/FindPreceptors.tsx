@@ -4,18 +4,36 @@ import {
   Navigation,
   X,
   CalendarDays,
+  CalendarClock,
+  CalendarPlus,
   CheckCircle2,
+  MapPin,
   Search as SearchIcon,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { findPreceptors, requestSitting, type SlotFilters } from '../lib/api'
+import {
+  searchAvailability,
+  requestSitting,
+  requestOpenSitting,
+  type AvailabilitySearch,
+  type SlotFilters,
+} from '../lib/api'
 import type { AvailableSlot, PreceptorWithSlots } from '../lib/types'
-import { Button, Field, Select, PageLoader, EmptyState, Badge } from '../components/ui'
+import { Badge, Button, Card, Field, Select, PageLoader, EmptyState } from '../components/ui'
 import { ZoneCenterPicker, type ZoneCenterValue } from '../components/ZoneCenterPicker'
 import { PreceptorCard } from '../components/PreceptorCard'
 import { PlaceLine } from '../components/PlaceLine'
 import { Modal } from '../components/Modal'
-import { upcomingDates, prettyDate, formatTimeRange, dayShort, cx } from '../lib/utils'
+import {
+  DEFAULT_SITTING_MINUTES,
+  addMinutesToTime,
+  durationMinutes,
+  upcomingDates,
+  prettyDate,
+  formatTimeRange,
+  dayShort,
+  cx,
+} from '../lib/utils'
 
 type TimeBand = '' | 'morning' | 'afternoon' | 'evening'
 const TIME_BANDS: Record<Exclude<TimeBand, ''>, { from: string; to: string }> = {
@@ -24,11 +42,7 @@ const TIME_BANDS: Record<Exclude<TimeBand, ''>, { from: string; to: string }> = 
   evening: { from: '17:00', to: '23:59' },
 }
 
-interface BookingTarget {
-  preceptor: PreceptorWithSlots['preceptor']
-  center: PreceptorWithSlots['center']
-  slot: AvailableSlot
-}
+const EMPTY_RESULT: AvailabilitySearch = { onDate: [], next: null, areas: [] }
 
 export default function FindPreceptors() {
   const { user, profile } = useAuth()
@@ -48,16 +62,23 @@ export default function FindPreceptors() {
   const [geoMsg, setGeoMsg] = useState<string | null>(null)
 
   // Results
-  const [results, setResults] = useState<PreceptorWithSlots[]>([])
+  const [result, setResult] = useState<AvailabilitySearch>(EMPTY_RESULT)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Booking modal
-  const [target, setTarget] = useState<BookingTarget | null>(null)
+  // Requesting a published time
+  const [target, setTarget] = useState<AvailableSlot | null>(null)
   const [note, setNote] = useState('')
   const [booking, setBooking] = useState(false)
   const [bookError, setBookError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+
+  // Asking for a time that was never published
+  const [askTarget, setAskTarget] = useState<PreceptorWithSlots | null>(null)
+  const [askDate, setAskDate] = useState('')
+  const [askStart, setAskStart] = useState('07:00')
+  const [askEnd, setAskEnd] = useState(addMinutesToTime('07:00', DEFAULT_SITTING_MINUTES))
+  const [askNote, setAskNote] = useState('')
 
   const activeFilterCount = (place.zoneId ? 1 : 0) + (place.centerId ? 1 : 0) + (band ? 1 : 0)
 
@@ -72,16 +93,19 @@ export default function FindPreceptors() {
         fromTime: band ? TIME_BANDS[band].from : undefined,
         toTime: band ? TIME_BANDS[band].to : undefined,
         origin: nearMe ? origin : null,
+        // Look across the whole strip of dates in one go, so "the next
+        // available time" and the by-area list cost no extra round trip.
+        windowStart: dates[0].iso,
+        windowDays: dates.length,
       }
-      const data = await findPreceptors(filters)
-      setResults(data)
+      setResult(await searchAvailability(filters))
     } catch (e: any) {
       setError(e.message ?? 'Could not load preceptors. Please try again.')
-      setResults([])
+      setResult(EMPTY_RESULT)
     } finally {
       setLoading(false)
     }
-  }, [date, place.zoneId, place.centerId, band, nearMe, origin])
+  }, [date, place.zoneId, place.centerId, band, nearMe, origin, dates])
 
   // Re-run whenever the date, any filter, or the location changes.
   useEffect(() => {
@@ -113,7 +137,7 @@ export default function FindPreceptors() {
           setNearMe(true)
           setGeoMsg('Using your saved home location.')
         } else {
-          setGeoMsg('Couldn\u2019t get your location. Add it in your profile to sort by distance.')
+          setGeoMsg('Couldn’t get your location. Add it in your profile to sort by distance.')
         }
       },
       { enableHighAccuracy: true, timeout: 10000 },
@@ -125,8 +149,14 @@ export default function FindPreceptors() {
     setBand('')
   }
 
-  function openBooking(p: PreceptorWithSlots, slot: AvailableSlot) {
-    setTarget({ preceptor: p.preceptor, center: p.center, slot })
+  function announce(message: string) {
+    setSuccess(message)
+    window.setTimeout(() => setSuccess(null), 7000)
+  }
+
+  // ---- Requesting a published time ----
+  function openBooking(slot: AvailableSlot) {
+    setTarget(slot)
     setNote('')
     setBookError(null)
   }
@@ -137,32 +167,89 @@ export default function FindPreceptors() {
     setBookError(null)
     try {
       await requestSitting({
-        slotId: target.slot.id,
+        slotId: target.id,
         abhyasiId: user.id,
-        date,
+        // The slot carries its own date, which is not always the day being
+        // looked at — "next available" can be further off.
+        date: target.date,
         note: note.trim() || undefined,
       })
+      const who = target.preceptor.full_name
       setTarget(null)
-      setSuccess(
-        `Request sent to ${target.preceptor.full_name} for ${prettyDate(date)}. ` +
-          `You'll be notified once it's confirmed.`,
+      announce(
+        `Request sent to ${who} for ${prettyDate(target.date)}. You'll be notified once it's confirmed.`,
       )
-      window.setTimeout(() => setSuccess(null), 7000)
       runSearch() // refresh remaining counts
     } catch (e: any) {
-      const code = e?.code as string | undefined
-      const msg = (e?.message as string | undefined) ?? ''
-      if (code === '23505' || /duplicate|unique/i.test(msg)) {
-        setBookError('You already have a request or sitting for this slot on this date.')
-      } else if (code === 'P0001' || /full/i.test(msg)) {
-        setBookError('This slot just filled up. Please choose another time.')
-      } else {
-        setBookError(msg || 'Could not send your request. Please try again.')
-      }
+      setBookError(requestErrorMessage(e))
     } finally {
       setBooking(false)
     }
   }
+
+  // ---- Asking for a time outside the schedule ----
+  function openAsk(p: PreceptorWithSlots) {
+    setAskTarget(p)
+    setAskDate(date)
+    setAskStart('07:00')
+    setAskEnd(addMinutesToTime('07:00', DEFAULT_SITTING_MINUTES))
+    setAskNote('')
+    setBookError(null)
+  }
+
+  function pickAskStart(start: string) {
+    const span = durationMinutes(askStart, askEnd) || DEFAULT_SITTING_MINUTES
+    setAskStart(start)
+    setAskEnd(addMinutesToTime(start, span))
+  }
+
+  async function submitAsk() {
+    if (!askTarget || !user) return
+    if (!askDate || !askStart) {
+      setBookError('Pick the day and time you would like.')
+      return
+    }
+    setBooking(true)
+    setBookError(null)
+    try {
+      await requestOpenSitting({
+        preceptorId: askTarget.preceptor.id,
+        abhyasiId: user.id,
+        date: askDate,
+        startTime: askStart,
+        endTime: askEnd || undefined,
+        note: askNote.trim() || undefined,
+      })
+      const who = askTarget.preceptor.full_name
+      const when = askDate
+      setAskTarget(null)
+      announce(
+        `Request sent to ${who} for ${prettyDate(when)}. They will confirm the time and where to meet.`,
+      )
+      runSearch()
+    } catch (e: any) {
+      setBookError(requestErrorMessage(e))
+    } finally {
+      setBooking(false)
+    }
+  }
+
+  // The soonest free time anywhere, shown when the seeker has not landed
+  // on a day that has one.
+  const next = result.next && result.next.date !== date ? result.next : null
+
+  // Preceptors open to being asked show up whatever the day, so "is there
+  // anything on this day" has to count published times, not names.
+  const withTimes = result.onDate.filter((p) => p.slots.length > 0)
+
+  // "Nobody near me" is either nothing at all on this day, or — with near
+  // me on — nobody we could actually place on a map.
+  const showAreas =
+    !loading &&
+    !error &&
+    (withTimes.length === 0 || (nearMe && withTimes.every((p) => p.distanceKm == null)))
+
+  const askableCount = result.onDate.length - withTimes.length
 
   return (
     <div className="space-y-4">
@@ -279,6 +366,34 @@ export default function FindPreceptors() {
         </div>
       )}
 
+      {/* The soonest free time anywhere — so a seeker who has picked no
+          slot is still told when the next one is, and whose. */}
+      {!loading && next && (
+        <Card className="border-brand-200 bg-brand-50/40">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="inline-flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-brand-700">
+                <CalendarClock className="h-3.5 w-3.5" /> Next available
+              </p>
+              <p className="mt-1 font-semibold text-ink-900">{next.preceptor.full_name}</p>
+              <p className="mt-0.5 text-sm text-ink-600">
+                {prettyDate(next.date)} · {formatTimeRange(next.start_time, next.end_time)}
+              </p>
+              <PlaceLine place={next.place} className="mt-0.5 text-xs" />
+            </div>
+            <div className="flex shrink-0 flex-col gap-2">
+              <Button onClick={() => openBooking(next)}>Request</Button>
+              <button
+                onClick={() => setDate(next.date)}
+                className="text-xs font-medium text-brand-600 hover:text-brand-700"
+              >
+                See that day
+              </button>
+            </div>
+          </div>
+        </Card>
+      )}
+
       {/* Results */}
       {loading ? (
         <PageLoader label="Finding preceptors…" />
@@ -293,33 +408,89 @@ export default function FindPreceptors() {
             </Button>
           }
         />
-      ) : results.length === 0 ? (
-        <EmptyState
-          icon={<CalendarDays className="h-8 w-8" />}
-          title="No open sittings"
-          subtitle={`No preceptors are available on ${prettyDate(date)} with these filters. Try another day or widen your filters.`}
-          action={
-            activeFilterCount > 0 ? (
-              <Button variant="secondary" onClick={clearFilters}>
-                Clear filters
-              </Button>
-            ) : undefined
-          }
-        />
       ) : (
-        <div className="space-y-3">
-          <p className="text-sm text-ink-500">
-            {results.length} preceptor{results.length > 1 ? 's' : ''} available on{' '}
-            <span className="font-medium text-ink-700">{prettyDate(date)}</span>
-          </p>
-          {results.map((p) => (
-            <PreceptorCard
-              key={p.preceptor.id}
-              data={p}
-              onBook={(slot) => openBooking(p, slot)}
+        <>
+          {withTimes.length > 0 ? (
+            <div className="space-y-3">
+              <p className="text-sm text-ink-500">
+                {withTimes.length} preceptor{withTimes.length > 1 ? 's' : ''} available on{' '}
+                <span className="font-medium text-ink-700">{prettyDate(date)}</span>
+                {askableCount > 0 &&
+                  `, and ${askableCount} more you can ask for a time`}
+              </p>
+              {result.onDate.map((p) => (
+                <PreceptorCard
+                  key={p.preceptor.id}
+                  data={p}
+                  onBook={openBooking}
+                  onAskTime={openAsk}
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              icon={<CalendarDays className="h-8 w-8" />}
+              title="No open sittings"
+              subtitle={`No preceptors have published a time on ${prettyDate(date)} with these filters.${
+                result.areas.length > 0 ? ' Here is everyone who is free soon.' : ''
+              }`}
+              action={
+                activeFilterCount > 0 ? (
+                  <Button variant="secondary" onClick={clearFilters}>
+                    Clear filters
+                  </Button>
+                ) : undefined
+              }
             />
-          ))}
-        </div>
+          )}
+
+          {/* Nobody near: the wider picture, area by area and center by
+              center, each preceptor with their soonest free time. */}
+          {showAreas && result.areas.length > 0 && (
+            <div className="space-y-5">
+              <div className="rounded-xl border border-brand-100 bg-brand-50/50 px-3.5 py-2.5 text-sm text-ink-600">
+                {nearMe
+                  ? 'Nobody could be placed near you, so here is everyone available, by area.'
+                  : 'Preceptors available in the next two weeks, by area.'}
+              </div>
+
+              {result.areas.map((area) => (
+                <div key={area.area}>
+                  <div className="mb-2 flex items-baseline justify-between gap-2">
+                    <h2 className="inline-flex items-center gap-1.5 font-serif text-lg text-ink-900">
+                      <MapPin className="h-4 w-4 text-brand-500" />
+                      {area.area}
+                    </h2>
+                    <span className="text-xs text-ink-400">
+                      {area.preceptorCount} preceptor{area.preceptorCount > 1 ? 's' : ''}
+                    </span>
+                  </div>
+
+                  <div className="space-y-4">
+                    {area.centers.map((group) => (
+                      <div key={group.centerId ?? group.centerName}>
+                        <p className="mb-2 text-sm font-semibold text-ink-700">
+                          {group.centerName}
+                        </p>
+                        <div className="space-y-3">
+                          {group.preceptors.map((p) => (
+                            <PreceptorCard
+                              key={p.preceptor.id}
+                              data={p}
+                              onBook={openBooking}
+                              onAskTime={openAsk}
+                              showNextAvailable
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       {/* Booking confirmation */}
@@ -344,14 +515,14 @@ export default function FindPreceptors() {
               <p className="font-semibold text-ink-900">{target.preceptor.full_name}</p>
               {/* The full address and a directions link — this is the point
                   where the abhyasi has to know how to get there. */}
-              <PlaceLine place={target.slot.place} showAddress className="mt-1" />
+              <PlaceLine place={target.place} showAddress className="mt-1" />
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                <Badge tone="brand">{prettyDate(date)}</Badge>
+                <Badge tone="brand">{prettyDate(target.date)}</Badge>
                 <span className="text-sm text-ink-700">
-                  {formatTimeRange(target.slot.start_time, target.slot.end_time)}
+                  {formatTimeRange(target.start_time, target.end_time)}
                 </span>
-                <Badge tone={target.slot.remaining === 1 ? 'amber' : 'green'}>
-                  {target.slot.remaining} of {target.slot.capacity} left
+                <Badge tone={target.remaining === 1 ? 'amber' : 'green'}>
+                  {target.remaining} of {target.capacity} left
                 </Badge>
               </div>
             </div>
@@ -377,6 +548,102 @@ export default function FindPreceptors() {
           </div>
         )}
       </Modal>
+
+      {/* Asking for a time outside the schedule */}
+      <Modal
+        open={!!askTarget}
+        onClose={() => (booking ? null : setAskTarget(null))}
+        title="Ask for a time"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setAskTarget(null)} disabled={booking}>
+              Cancel
+            </Button>
+            <Button onClick={submitAsk} loading={booking} className="flex-1">
+              Send request
+            </Button>
+          </>
+        }
+      >
+        {askTarget && (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-brand-100 bg-brand-50/50 p-3.5">
+              <p className="font-semibold text-ink-900">{askTarget.preceptor.full_name}</p>
+              <p className="mt-1 inline-flex items-start gap-1.5 text-sm text-ink-600">
+                <CalendarPlus className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-500" />
+                Takes requests outside their published schedule. They confirm the time and where to
+                meet.
+              </p>
+            </div>
+
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-medium text-ink-700">Day</span>
+              <input
+                type="date"
+                value={askDate}
+                min={dates[0].iso}
+                onChange={(e) => setAskDate(e.target.value)}
+                className="w-full rounded-xl border border-brand-200 bg-white px-3.5 py-2.5 text-ink-900 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100"
+              />
+            </label>
+
+            <div className="flex gap-3">
+              <label className="block flex-1">
+                <span className="mb-1.5 block text-sm font-medium text-ink-700">From</span>
+                <input
+                  type="time"
+                  value={askStart}
+                  onChange={(e) => pickAskStart(e.target.value)}
+                  className="w-full rounded-xl border border-brand-200 bg-white px-3.5 py-2.5 text-ink-900 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100"
+                />
+              </label>
+              <label className="block flex-1">
+                <span className="mb-1.5 block text-sm font-medium text-ink-700">To</span>
+                <input
+                  type="time"
+                  value={askEnd}
+                  onChange={(e) => setAskEnd(e.target.value)}
+                  className="w-full rounded-xl border border-brand-200 bg-white px-3.5 py-2.5 text-ink-900 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100"
+                />
+              </label>
+            </div>
+
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-medium text-ink-700">
+                Note for the preceptor <span className="text-ink-400">(optional)</span>
+              </span>
+              <textarea
+                value={askNote}
+                onChange={(e) => setAskNote(e.target.value)}
+                rows={3}
+                placeholder="Anything they should know"
+                className="w-full rounded-xl border border-brand-200 bg-white px-3.5 py-2.5 text-ink-900 placeholder:text-ink-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100"
+              />
+            </label>
+
+            {bookError && (
+              <p className="rounded-xl border border-red-100 bg-red-50 px-3.5 py-2.5 text-sm text-red-600">
+                {bookError}
+              </p>
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   )
+}
+
+// The database refuses a double booking, a full slot and a preceptor who
+// does not take open requests; each deserves plainer words than it gives.
+function requestErrorMessage(e: any): string {
+  const code = e?.code as string | undefined
+  const msg = (e?.message as string | undefined) ?? ''
+  if (code === '23505' || /duplicate|unique/i.test(msg)) {
+    return 'You already have a request or sitting at that time.'
+  }
+  if (/full/i.test(msg)) return 'This slot just filled up. Please choose another time.'
+  if (/published schedule/i.test(msg)) {
+    return 'This preceptor has stopped taking requests outside their schedule.'
+  }
+  return msg || 'Could not send your request. Please try again.'
 }

@@ -36,14 +36,20 @@ This guide assumes **no prior experience** with coding tools, command lines, or 
 - Pick a day, then filter preceptors by zone, by city/center, or by time of day.
 - See each preceptor's open times and how many places remain (for example, "1 of 4 left").
 - See **where** each sitting happens — the heartspot or the preceptor's home — with the address and a **Directions** link. A preceptor's home address appears only once they have confirmed your sitting.
+- Be shown the **next available time** and whose it is, without having to tap through the days one by one.
+- When nobody is free nearby, see **everyone else who is free**, grouped by area and then by center.
+- Ask a preceptor for a time they haven't published, where that preceptor allows it.
 - Book a sitting, add an optional note, and later cancel it.
 - Optionally use "Near me" to sort preceptors by distance from your location.
+- Be **notified** when a request is confirmed, declined, cancelled, or answered with another time.
 
 **For preceptors (trainers):**
 - Everything an abhyasi can do (preceptors can also book sittings with others), **plus**, once an admin has approved the account:
-- Set their weekly availability — day, start and end time, **how many people can join**, and where the sitting happens.
+- Set their weekly availability — day, start and end time, **how many people can join**, and where the sitting happens. A time that repeats can be set for **several days at once**, and the end time follows the start by 30 minutes.
 - Choose the place per slot: a **heartspot** of their center, or **their own home**. The home address is entered once on the Profile screen (with a Google location they pin on a map) and stays private until they confirm a sitting.
+- Optionally **accept requests outside their schedule** — which also puts them in "Near me" on days they hold no slot.
 - Pause a slot without deleting it.
+- Be **notified** whenever someone requests a sitting, from their schedule or outside it.
 - See who has booked (with the person's phone number) and mark a sitting as completed or cancelled.
 
 **For admins:**
@@ -370,8 +376,44 @@ Run the files in **`supabase/migrations/`** in the SQL Editor, in number order, 
 | `006_private_home_address.sql` | Moves a preceptor's **home address into its own table**, so it is readable only after they confirm a sitting (see below). Run it right after 005. |
 | `007_home_address_on_profile.sql` | Moves that address from the slot to the **profile** — a preceptor has one home, not one per weekly slot. Also takes `home_latitude` / `home_longitude` off `profiles`, closing a hole where any signed-in user could read where anyone else lived. |
 | `008_preceptor_approval.sql` | Makes a **preceptor account wait for an admin's approval** before it can publish a schedule or take requests (see below). Everyone already registered as a preceptor is marked approved, so nothing in a running app stops working — only new sign-ups have to wait. |
+| `009_open_requests_and_notifications.sql` | Lets a preceptor **accept requests outside their schedule**, adds the **notifications** inbox, and adds the look-ahead search behind "next available time" and the by-area list. |
 
-A fresh `schema.sql` already includes 003–008 — the migrations are only for a database that already exists.
+A fresh `schema.sql` already includes 003–009 — the migrations are only for a database that already exists.
+
+### Being asked for a time outside the schedule
+
+A preceptor's schedule is the times they have published. Some are happy to be asked for others; the toggle **"Accept requests outside my schedule"** — on the Profile screen, and on the dashboard where it is easier to change week to week — is that choice.
+
+When it is on, two things follow. The preceptor is listed in search, and in **Near me**, even on a day they hold no slot; and an abhyasi can name a day and time themselves. Such a request has no slot behind it, so it carries its own time and no place — the preceptor settles where to meet when they confirm.
+
+These requests are **never auto-confirmed**, even for a preceptor who has auto-confirm on. Auto-confirm is a promise about times you published; a time nobody published is always yours to accept by hand.
+
+An **unapproved** preceptor is not listed and cannot be asked, switch or no switch: approval comes first, everywhere.
+
+The rules are enforced in the database, not on the screen: a request with no slot is refused unless that preceptor has opted in and been approved.
+
+### Notifications
+
+The database writes a notification whenever something happens that someone should hear about:
+
+| Who hears | When |
+|---|---|
+| The preceptor | Someone requests a sitting — from their schedule or outside it |
+| The preceptor | An abhyasi cancels a sitting |
+| The abhyasi | Their request is confirmed, declined, or cancelled |
+| The abhyasi | The preceptor proposes another time |
+
+They appear under the **bell** in the top bar, with a count of the unread ones. The count is refreshed when a screen is opened, when the tab regains focus, and once a minute — so it is never more than a minute stale, without holding a connection open.
+
+Nobody can write into anyone's inbox: the rows are written by a database trigger, and no one is granted permission to insert them.
+
+### Finding a time when nothing is free today
+
+Two things stop a search from ending in a dead end.
+
+**Next available.** The search reads the whole fortnight in one go, so when the day being looked at has nothing, the app can still say when the next free time is and whose — with a button to request it there and then.
+
+**By area.** When nobody is available near the seeker, the results are replaced by every available preceptor grouped by **area** (the center's city) and then by **center**, each with their soonest free time. With "Near me" on, the closest area comes first.
 
 ### A preceptor's home address is private
 

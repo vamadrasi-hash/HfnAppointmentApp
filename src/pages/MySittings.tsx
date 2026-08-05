@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Phone, Inbox, Info, Check, X, CalendarClock, Clock3, UserX } from 'lucide-react'
+import {
+  Phone,
+  Inbox,
+  Info,
+  Check,
+  X,
+  CalendarClock,
+  CalendarPlus,
+  Clock3,
+  UserX,
+} from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import {
   getMySittings,
@@ -16,7 +26,18 @@ import { isApprovedPreceptor, isPendingPreceptor, isPreceptorRole } from '../lib
 import { Avatar, Badge, Button, Card, EmptyState, PageLoader, SectionTitle } from '../components/ui'
 import { Modal } from '../components/Modal'
 import { PlaceLine } from '../components/PlaceLine'
-import { formatTimeRange, formatTime, prettyDate, isPastDate, statusLabel, statusTone } from '../lib/utils'
+import {
+  DEFAULT_SITTING_MINUTES,
+  addMinutesToTime,
+  bookingTimes,
+  durationMinutes,
+  formatTimeRange,
+  formatTime,
+  prettyDate,
+  isPastDate,
+  statusLabel,
+  statusTone,
+} from '../lib/utils'
 
 function SittingCard({
   b,
@@ -40,6 +61,10 @@ function SittingCard({
   const isRequested = b.status === 'requested'
   const isLiveConfirmed = b.status === 'confirmed' || b.status === 'reminded'
   const isAlternate = b.status === 'alternate_proposed'
+  // A request for a time this preceptor never published: it has no slot,
+  // so it carries its own time and no place.
+  const isOpenRequest = !b.slot_id
+  const times = bookingTimes(b)
 
   return (
     <Card>
@@ -53,8 +78,14 @@ function SittingCard({
             <Badge tone={statusTone(b.status)}>{statusLabel(b.status)}</Badge>
           </div>
           <div className="mt-1 text-sm text-ink-500">
-            {b.slot && <span>{formatTimeRange(b.slot.start_time, b.slot.end_time)}</span>}
+            {times && <span>{formatTimeRange(times.start, times.end)}</span>}
             <PlaceLine place={b.place} className="mt-0.5" />
+            {isOpenRequest && (
+              <p className="mt-1 inline-flex items-center gap-1.5 rounded-lg bg-gold-100/60 px-2.5 py-1 text-xs text-gold-600">
+                <CalendarPlus className="h-3 w-3" />
+                Asked for outside your schedule — agree the place when you confirm.
+              </p>
+            )}
           </div>
           {b.abhyasi?.phone && (
             <a
@@ -181,10 +212,19 @@ export default function MySittings() {
   }
 
   function openPropose(b: BookingDetail) {
+    const t = bookingTimes(b)
     setAltDate(b.booking_date)
-    setAltStart(b.slot?.start_time?.slice(0, 5) ?? '')
-    setAltEnd(b.slot?.end_time?.slice(0, 5) ?? '')
+    setAltStart(t?.start.slice(0, 5) ?? '')
+    setAltEnd(t?.end.slice(0, 5) ?? '')
     setProposeTarget(b)
+  }
+
+  // Same rule as the schedule form: the end follows the start, keeping
+  // whatever length is already there.
+  function pickAltStart(start: string) {
+    const span = durationMinutes(altStart, altEnd) || DEFAULT_SITTING_MINUTES
+    setAltStart(start)
+    setAltEnd(addMinutesToTime(start, span))
   }
   async function submitPropose() {
     if (!proposeTarget || !altDate || !altStart) return
@@ -388,7 +428,7 @@ export default function MySittings() {
               <input
                 type="time"
                 value={altStart}
-                onChange={(e) => setAltStart(e.target.value)}
+                onChange={(e) => pickAltStart(e.target.value)}
                 className="w-full rounded-xl border border-brand-200 bg-white px-3.5 py-2.5 text-ink-900 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100"
               />
             </label>
