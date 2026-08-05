@@ -385,7 +385,7 @@ A fresh `schema.sql` already includes 003–010 — the migrations are only for 
 
 A preceptor's schedule is the times they have published. Some are happy to be asked for others; the toggle **"Accept requests outside my schedule"** — on the Profile screen, and on the dashboard where it is easier to change week to week — is that choice.
 
-When it is on, the preceptor is listed on **every** day of the search — including days when nobody at all has published a time, where they are the whole answer rather than a footnote to it. They are ordered nearest first, from the phone's location when **Near me** is on and otherwise from the home location on the seeker's own profile, so the closest preceptor who can be asked is the first one on the list.
+When it is on, the preceptor is listed on **every** day of the search — including days when nobody at all has published a time, where they are the whole answer rather than a footnote to it. Turn **Near me** on and that list is ordered nearest first, so the closest preceptor who can be asked comes first; with it off there are no distances to sort by and the list is ordered by name.
 
 From there the seeker names a day and a time. Such a request has no slot behind it, so it carries its own time and no place. The preceptor sees it under **Incoming sittings** with the abhyasi's **mobile number** beside it, and either confirms the time as it stands or proposes another with **New time** — which the abhyasi then accepts or declines. Where to meet is settled when they confirm.
 

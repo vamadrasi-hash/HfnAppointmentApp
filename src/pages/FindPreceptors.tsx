@@ -92,19 +92,9 @@ export default function FindPreceptors() {
   // catches accounts made before it was asked for.
   const hasPhone = isUsablePhone(profile?.phone)
 
-  // Nearest first is the order that makes sense for a list of people you
-  // might travel to, so we sort by distance whenever we can work one out —
-  // from the phone when "near me" is on, and otherwise from the home
-  // location on the profile.
-  const home = profile?.home_place
-  const savedOrigin = useMemo(
-    () =>
-      home?.latitude != null && home?.longitude != null
-        ? { lat: home.latitude, lng: home.longitude }
-        : null,
-    [home?.latitude, home?.longitude],
-  )
-  const searchOrigin = nearMe ? origin : savedOrigin
+  // Distance is a "near me" answer and nothing else: with the button off
+  // we measure nothing and show nothing, and the list is ordered by name.
+  const searchOrigin = nearMe ? origin : null
 
   const runSearch = useCallback(async () => {
     setLoading(true)
@@ -455,7 +445,7 @@ export default function FindPreceptors() {
         <>
           {/* Everyone who can give a sitting on this day — the ones with a
               published time, and the ones who will take a time of your
-              choosing. Nearest first whenever we know where you are. */}
+              choosing. Nearest first with "near me" on. */}
           {result.onDate.length > 0 ? (
             <div className="space-y-3">
               <p className="text-sm text-ink-500">
