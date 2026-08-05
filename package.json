@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "check:schema": "node scripts/check-schema.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

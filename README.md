@@ -129,6 +129,20 @@ Supabase stores all the data — users, preceptors, slots and bookings.
 
 > This file is safe to run again later if you ever want to start fresh — it clears and rebuilds everything.
 
+### If your project was created before today
+
+`schema.sql` is the **whole** database as it stands now, so a brand-new project needs nothing else. A project you created earlier was built from an older version of that file, and each thing added since lives in its own numbered file under **`supabase/migrations/`**.
+
+Run the ones your project has not had yet, **in number order** (`001`, `002`, … `010`), the same way as Step D: SQL Editor → **+ New query** → paste the file → **Run**. Every migration is written to be safe to run twice, so if you are not sure which ones you have had, run them all from `001` upwards.
+
+Then confirm the database and the app agree:
+
+```bash
+npm run check:schema
+```
+
+It reports either *"has everything the app needs"* or the exact list of what is missing and which file adds it. Run it whenever you pull new code — see [Troubleshooting](#troubleshooting) for the error it saves you from.
+
 ---
 
 ## Step E — Load the sample data
@@ -576,6 +590,12 @@ How the **"places left"** count stays correct: the database itself counts the pe
 ---
 
 ## Troubleshooting
+
+**A red message says "Could not find the 'something' column of 'sometable' in the schema cache".**
+- The app is asking for something the database does not have yet: a migration under `supabase/migrations/` was never run against this project. Nothing is broken and no data is lost.
+- Run `npm run check:schema`. It names every missing piece **and the file that adds it**, for example *"Run supabase/migrations/010_cancellation_message_and_session_types.sql"*.
+- Paste those files into the Supabase SQL Editor in number order and run them ([details in Step D](#if-your-project-was-created-before-today)), then reload the app.
+- If the column does exist in the Supabase **Table Editor** but the app still complains, only the cache is stale: run `notify pgrst, 'reload schema';` in the SQL Editor.
 
 **The "Continue with Google" button does nothing or shows an error.**
 - Re-check Step F. The most common mistake is a missing or mistyped **redirect URL**. The URL in Google must be exactly `https://YOUR-PROJECT-REF.supabase.co/auth/v1/callback`, and your app's address must be listed under **Redirect URLs** in Supabase.
