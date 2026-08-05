@@ -2,6 +2,7 @@ import { Outlet, useNavigate } from 'react-router-dom'
 import { BottomNav } from './BottomNav'
 import { useAuth } from '../context/AuthContext'
 import { Avatar } from './ui'
+import { HeartfulnessMark } from './Logo'
 
 export function Layout() {
   const { profile } = useAuth()
@@ -14,15 +15,18 @@ export function Layout() {
         <div className="flex items-center justify-between px-4 py-3">
           <button
             onClick={() => navigate('/dashboard')}
-            className="flex items-center gap-2"
+            className="flex items-center gap-2.5"
             aria-label="Home"
           >
-            <span className="relative flex h-7 w-7 items-center justify-center">
-              <span className="absolute h-7 w-7 animate-breathe rounded-full bg-brand-100" />
-              <span className="relative h-2.5 w-2.5 rounded-full bg-brand-600" />
+            <span className="relative flex h-8 w-8 items-center justify-center">
+              <span className="absolute inset-0 rounded-full bg-brand-50" />
+              <HeartfulnessMark className="relative h-5 w-5 text-brand-600" />
             </span>
-            <span className="font-serif text-lg leading-none text-ink-900">
-              Heartfulness <span className="text-brand-600">Sittings</span>
+            <span
+              className="font-serif text-lg leading-none tracking-[-0.01em] text-ink-900"
+              style={{ fontVariationSettings: "'opsz' 144" }}
+            >
+              heartfulness <span className="text-brand-600">sittings</span>
             </span>
           </button>
           {profile && (

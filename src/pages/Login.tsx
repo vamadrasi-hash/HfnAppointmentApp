@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { Button, Field, Input } from '../components/ui'
+import { HeartfulnessLockup } from '../components/Logo'
 import { cx } from '../lib/utils'
 
 export default function Login() {
@@ -55,74 +56,72 @@ export default function Login() {
   }
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6 py-10">
-      {/* Hero */}
-      <div className="mb-8 text-center">
-        <div className="mx-auto mb-5 flex h-20 w-20 items-center justify-center">
-          <span className="absolute h-20 w-20 animate-breathe rounded-full bg-brand-100" />
-          <span className="relative flex h-14 w-14 items-center justify-center rounded-full bg-white shadow-soft">
-            <span className="h-5 w-5 rounded-full bg-brand-600" />
-          </span>
-        </div>
-        <h1 className="font-serif text-3xl text-ink-900">
-          Heartfulness <span className="text-brand-600">Sittings</span>
-        </h1>
-        <p className="mx-auto mt-2 max-w-xs text-sm text-ink-500">
+    <div className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6 py-12">
+      {/* Hero — the mark, then the logotype */}
+      <div className="mb-9 flex flex-col items-center text-center">
+        <HeartfulnessLockup />
+        <span className="mt-7 h-px w-12 bg-brand-200" />
+        <p className="mt-5 text-[0.7rem] font-semibold uppercase tracking-[0.24em] text-brand-600">
+          Sittings
+        </p>
+        <p className="mx-auto mt-3 max-w-xs text-sm leading-relaxed text-ink-500">
           Book individual meditation sittings with a preceptor, or offer your own availability.
         </p>
       </div>
 
-      <Button variant="secondary" full onClick={google} loading={busy} className="py-3">
-        <GoogleMark /> Continue with Google
-      </Button>
+      <div className="rounded-2xl border border-brand-100 bg-white/80 p-6 shadow-soft backdrop-blur-sm">
+        <Button variant="secondary" full onClick={google} loading={busy} className="py-3">
+          <GoogleMark /> Continue with Google
+        </Button>
 
-      <div className="my-5 flex items-center gap-3 text-xs text-ink-400">
-        <div className="h-px flex-1 bg-brand-100" />
-        or use email
-        <div className="h-px flex-1 bg-brand-100" />
-      </div>
+        <div className="my-5 flex items-center gap-3 text-xs text-ink-400">
+          <div className="h-px flex-1 bg-brand-100" />
+          or use email
+          <div className="h-px flex-1 bg-brand-100" />
+        </div>
 
-      <div className="space-y-3">
-        {mode === 'signup' && (
-          <Field label="Full name">
+        <div className="space-y-3">
+          {mode === 'signup' && (
+            <Field label="Full name">
+              <Input
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="Your name"
+                autoComplete="name"
+              />
+            </Field>
+          )}
+          <Field label="Email">
             <Input
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              placeholder="Your name"
-              autoComplete="name"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              autoComplete="email"
             />
           </Field>
-        )}
-        <Field label="Email">
-          <Input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@example.com"
-            autoComplete="email"
-          />
-        </Field>
-        <Field label="Password">
-          <Input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="••••••••"
-            autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
-            onKeyDown={(e) => e.key === 'Enter' && emailSubmit()}
-          />
-        </Field>
+          <Field label="Password">
+            <Input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+              onKeyDown={(e) => e.key === 'Enter' && emailSubmit()}
+            />
+          </Field>
+        </div>
+
+        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+        {info && <p className="mt-3 text-sm text-brand-700">{info}</p>}
+
+        <Button full onClick={emailSubmit} loading={busy} className="mt-4 py-3">
+          {mode === 'signin' ? 'Sign in' : 'Create account'}
+        </Button>
       </div>
 
-      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
-      {info && <p className="mt-3 text-sm text-brand-700">{info}</p>}
-
-      <Button full onClick={emailSubmit} loading={busy} className="mt-4 py-3">
-        {mode === 'signin' ? 'Sign in' : 'Create account'}
-      </Button>
-
-      <p className="mt-5 text-center text-sm text-ink-500">
-        {mode === 'signin' ? "New here?" : 'Already have an account?'}{' '}
+      <p className="mt-6 text-center text-sm text-ink-500">
+        {mode === 'signin' ? 'New here?' : 'Already have an account?'}{' '}
         <button
           className={cx('font-semibold text-brand-700 underline-offset-2 hover:underline')}
           onClick={() => {

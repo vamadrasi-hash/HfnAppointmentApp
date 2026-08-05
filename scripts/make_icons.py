@@ -1,144 +1,135 @@
 #!/usr/bin/env python3
-"""Generate the Heartfulness Sittings app icons: a calm white lotus on a teal tile."""
-import math
-from PIL import Image, ImageDraw
+"""Render public/favicon.svg into the PNG app icons.
 
-OUT = "/home/claude/heartfulness-ams/public"
+The mark lives in exactly one place — public/favicon.svg — and every raster
+icon is rendered from it, so the logo can never drift between formats.
 
-TEAL_TOP = (15, 118, 110)     # #0f766e  (brand-600)
-TEAL_BOT = (11, 79, 72)       # deeper teal for a soft vertical gradient
-WHITE = (255, 255, 255)
+Usage:  python3 scripts/make_icons.py [path-to-chrome]
 
-# Petal fan: angle (deg from vertical), width, height (as fraction of S), alpha
-PETALS = [
-    (-54, 0.135, 0.34, 140),
-    (-28, 0.150, 0.40, 175),
-    (0,   0.165, 0.46, 235),
-    (28,  0.150, 0.40, 175),
-    (54,  0.135, 0.34, 140),
+Needs a Chromium/Chrome binary. Pass the path as an argument, or set CHROME.
+No Python packages required.
+"""
+import binascii
+import os
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+import zlib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+PUBLIC = ROOT / "public"
+SVG = PUBLIC / "favicon.svg"
+
+# (output file, pixel size)
+TARGETS = [
+    ("pwa-512x512.png", 512),
+    ("pwa-192x192.png", 192),
+    ("apple-touch-icon.png", 180),
+    ("favicon-64.png", 64),
+]
+
+# Headless Chrome treats --window-size as the *outer* window size and still
+# reserves room for the (invisible) frame, so the page is painted this many
+# pixels shorter than asked. We render tall and crop the slack off the bottom.
+FRAME_SLACK = 120
+
+CANDIDATES = [
+    os.environ.get("CHROME"),
+    "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
+    shutil.which("chromium"),
+    shutil.which("chromium-browser"),
+    shutil.which("google-chrome"),
 ]
 
 
-def rounded_mask(size, radius):
-    m = Image.new("L", (size, size), 0)
-    d = ImageDraw.Draw(m)
-    d.rounded_rectangle([0, 0, size - 1, size - 1], radius=radius, fill=255)
-    return m
+def find_chrome(argv):
+    for c in ([argv[1]] if len(argv) > 1 else []) + CANDIDATES:
+        if c and Path(c).exists():
+            return c
+    sys.exit("No Chromium/Chrome found. Pass the binary path as an argument.")
 
 
-def gradient_tile(size):
-    base = Image.new("RGB", (size, size), TEAL_TOP)
-    top, bot = TEAL_TOP, TEAL_BOT
-    px = base.load()
-    for y in range(size):
-        t = y / (size - 1)
-        # ease the blend slightly toward the centre
-        t = t * t * (3 - 2 * t)
-        r = int(top[0] + (bot[0] - top[0]) * t)
-        g = int(top[1] + (bot[1] - top[1]) * t)
-        b = int(top[2] + (bot[2] - top[2]) * t)
-        for x in range(size):
-            px[x, y] = (r, g, b)
-    return base
-
-
-def draw_petal(canvas_size, width, height, alpha, angle_deg, base_xy):
-    """Draw one upright petal then rotate it about the lotus base point."""
-    S = canvas_size
-    layer = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    d = ImageDraw.Draw(layer)
-    pw = width * S
-    ph = height * S
-    cx = S / 2
-    base_y = S / 2  # petal base sits at layer centre, tip points up
-    bbox = [cx - pw / 2, base_y - ph, cx + pw / 2, base_y]
-    d.ellipse(bbox, fill=(*WHITE, alpha))
-    # rotate about the layer centre (which is the petal base)
-    layer = layer.rotate(-angle_deg, center=(cx, base_y), resample=Image.BICUBIC)
-    # composite so the layer centre lands on the lotus base point
-    off = (int(base_xy[0] - cx), int(base_xy[1] - base_y))
-    return layer, off
-
-
-def build_icon(size, corner_ratio=0.235):
-    SS = size * 2  # supersample for smooth edges
-    tile = gradient_tile(SS).convert("RGBA")
-
-    base_xy = (SS / 2, SS * 0.665)
-
-    # Soft halo behind the lotus
-    halo = Image.new("RGBA", (SS, SS), (0, 0, 0, 0))
-    hd = ImageDraw.Draw(halo)
-    hr = SS * 0.30
-    hd.ellipse(
-        [base_xy[0] - hr, base_xy[1] - hr * 1.15, base_xy[0] + hr, base_xy[1] + hr * 0.85],
-        fill=(*WHITE, 26),
-    )
-    tile = Image.alpha_composite(tile, halo)
-
-    # Petals
-    for angle, w, h, a in PETALS:
-        layer, off = draw_petal(SS, w, h, a, angle, base_xy)
-        shifted = Image.new("RGBA", (SS, SS), (0, 0, 0, 0))
-        shifted.paste(layer, off, layer)
-        tile = Image.alpha_composite(tile, shifted)
-
-    # Small base bud + a calm centre dot
-    bd = ImageDraw.Draw(tile)
-    br = SS * 0.045
-    bd.ellipse(
-        [base_xy[0] - br, base_xy[1] - br, base_xy[0] + br, base_xy[1] + br],
-        fill=(*WHITE, 235),
+def _chunk(tag: bytes, data: bytes) -> bytes:
+    return struct.pack(">I", len(data)) + tag + data + struct.pack(
+        ">I", binascii.crc32(tag + data) & 0xFFFFFFFF
     )
 
-    # Round the corners
-    mask = rounded_mask(SS, int(SS * corner_ratio))
-    tile.putalpha(mask)
 
-    return tile.resize((size, size), Image.LANCZOS)
+def crop_height(png: bytes, keep_rows: int) -> bytes:
+    """Trim a PNG to its first `keep_rows` rows.
 
+    PNG row filters only ever refer to the row above, so the compressed
+    scanlines for the rows we keep are self-contained: truncating the
+    decompressed stream is enough, and no unfiltering is needed.
+    """
+    pos, chunks, idat = 8, [], b""
+    while pos < len(png):
+        (length,) = struct.unpack(">I", png[pos : pos + 4])
+        tag = png[pos + 4 : pos + 8]
+        data = png[pos + 8 : pos + 8 + length]
+        pos += 12 + length
+        if tag == b"IDAT":
+            idat += data
+        else:
+            chunks.append((tag, data))
 
-def write_svg():
-    petals_svg = []
-    cx, by = 256, 338
-    cy = 218  # petal centre so its bottom (cy+ry) reaches the base
-    for angle, w, h, a in PETALS:
-        rx = w * 512 / 2
-        ry = h * 512 / 2
-        pcy = by - ry
-        petals_svg.append(
-            f'<ellipse cx="{cx}" cy="{pcy:.1f}" rx="{rx:.1f}" ry="{ry:.1f}" '
-            f'fill="#ffffff" fill-opacity="{a/255:.2f}" '
-            f'transform="rotate({angle} {cx} {by})"/>'
-        )
-    petals = "\n      ".join(petals_svg)
-    svg = f"""<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#0f766e"/>
-      <stop offset="1" stop-color="#0b4f48"/>
-    </linearGradient>
-  </defs>
-  <rect x="0" y="0" width="512" height="512" rx="120" fill="url(#tile)"/>
-  <ellipse cx="256" cy="300" rx="150" ry="150" fill="#ffffff" fill-opacity="0.10"/>
-  <g>
-      {petals}
-  </g>
-  <circle cx="256" cy="338" r="23" fill="#ffffff" fill-opacity="0.92"/>
-</svg>
-"""
-    with open(f"{OUT}/favicon.svg", "w") as f:
-        f.write(svg)
+    header = dict(zip(("w", "h", "depth", "color", "comp", "filt", "inter"),
+                      struct.unpack(">IIBBBBB", next(d for t, d in chunks if t == b"IHDR"))))
+    if header["depth"] != 8 or header["inter"] != 0:
+        raise SystemExit("unexpected PNG format from Chrome (depth/interlace)")
+    if keep_rows >= header["h"]:
+        return png
+
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[header["color"]]
+    stride = header["w"] * channels + 1  # +1 for the per-row filter byte
+    raw = zlib.decompress(idat)[: stride * keep_rows]
+
+    body = b"".join(
+        _chunk(t, struct.pack(">II", header["w"], keep_rows) + d[8:] if t == b"IHDR" else d)
+        for t, d in chunks
+        if t != b"IEND"
+    )
+    return png[:8] + body + _chunk(b"IDAT", zlib.compress(raw, 9)) + _chunk(b"IEND", b"")
 
 
 def main():
-    write_svg()
-    build_icon(512).save(f"{OUT}/pwa-512x512.png")
-    build_icon(192).save(f"{OUT}/pwa-192x192.png")
-    build_icon(180).save(f"{OUT}/apple-touch-icon.png")
-    # a small favicon png as a fallback for older browsers
-    build_icon(64).save(f"{OUT}/favicon-64.png")
-    print("Icons written to", OUT)
+    chrome = find_chrome(sys.argv)
+    svg = SVG.read_text()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        for name, size in TARGETS:
+            page = tmp / f"{name}.html"
+            page.write_text(
+                "<!doctype html><html><head><style>"
+                "html,body{margin:0;background:transparent}"
+                "svg{display:block;width:100%;height:100%}"
+                "</style></head><body>"
+                f"<div style='width:{size}px;height:{size}px'>{svg}</div>"
+                "</body></html>"
+            )
+            shot = tmp / name
+            subprocess.run(
+                [
+                    chrome,
+                    "--headless",
+                    "--no-sandbox",
+                    "--disable-gpu",
+                    "--hide-scrollbars",
+                    "--default-background-color=00000000",
+                    f"--user-data-dir={tmp / 'profile'}",
+                    f"--screenshot={shot}",
+                    f"--window-size={size},{size + FRAME_SLACK}",
+                    page.as_uri(),
+                ],
+                check=True,
+                capture_output=True,
+            )
+            (PUBLIC / name).write_bytes(crop_height(shot.read_bytes(), size))
+            print(f"wrote public/{name} ({size}x{size})")
 
 
 if __name__ == "__main__":

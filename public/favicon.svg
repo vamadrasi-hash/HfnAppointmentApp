@@ -1,18 +1,19 @@
 <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#0f766e"/>
-      <stop offset="1" stop-color="#0b4f48"/>
+      <stop offset="0" stop-color="#4d6299"/>
+      <stop offset="1" stop-color="#33436e"/>
     </linearGradient>
   </defs>
   <rect x="0" y="0" width="512" height="512" rx="120" fill="url(#tile)"/>
-  <ellipse cx="256" cy="300" rx="150" ry="150" fill="#ffffff" fill-opacity="0.10"/>
-  <g>
-      <ellipse cx="256" cy="251.0" rx="34.6" ry="87.0" fill="#ffffff" fill-opacity="0.55" transform="rotate(-54 256 338)"/>
-      <ellipse cx="256" cy="235.6" rx="38.4" ry="102.4" fill="#ffffff" fill-opacity="0.69" transform="rotate(-28 256 338)"/>
-      <ellipse cx="256" cy="220.2" rx="42.2" ry="117.8" fill="#ffffff" fill-opacity="0.92" transform="rotate(0 256 338)"/>
-      <ellipse cx="256" cy="235.6" rx="38.4" ry="102.4" fill="#ffffff" fill-opacity="0.69" transform="rotate(28 256 338)"/>
-      <ellipse cx="256" cy="251.0" rx="34.6" ry="87.0" fill="#ffffff" fill-opacity="0.55" transform="rotate(54 256 338)"/>
+  <g fill="#ffffff" transform="translate(97.3 109.6) scale(1.058)">
+    <path fill-rule="evenodd" d="M148 14a17 17 0 1 0 0 34 17 17 0 1 0 0-34Zm0 8.5a8.5 8.5 0 1 1 0 17 8.5 8.5 0 1 1 0-17Z"/>
+    <path d="M136 20 C 128 11, 116 11, 112 20 C 119 15, 127 17, 133 25 Z"/>
+    <path d="M150 72 C 160 100, 161 126, 151 150 C 141 126, 140 100, 150 72 Z"/>
+    <circle cx="151" cy="161" r="5.5"/>
+    <path id="arm" d="M143 56 C 108 84, 60 134, 64 178 C 67 206, 116 220, 152 224 C 126 212, 90 198, 92 174 C 94 134, 128 84, 143 56 Z"/>
+    <use href="#arm" transform="translate(300,0) scale(-1,1)"/>
+    <path id="leg" d="M178 196 C 128 220, 74 234, 22 242 C 86 292, 140 268, 178 196 Z"/>
+    <use href="#leg" transform="translate(300,0) scale(-1,1)"/>
   </g>
-  <circle cx="256" cy="338" r="23" fill="#ffffff" fill-opacity="0.92"/>
 </svg>
