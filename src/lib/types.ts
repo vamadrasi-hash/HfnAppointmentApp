@@ -2,6 +2,13 @@
 
 export type UserRole = 'abhyasi' | 'preceptor' | 'coordinator' | 'admin'
 
+/**
+ * Where a preceptor account stands with the administrators. Null for
+ * anyone who is not a preceptor — an abhyasi needs no approval, they sign
+ * in and start requesting sittings.
+ */
+export type PreceptorStatus = 'pending' | 'approved' | 'rejected'
+
 // The full sitting lifecycle. See the state machine in the spec.
 export type BookingStatus =
   | 'requested'
@@ -71,6 +78,13 @@ export interface Profile {
   email: string | null
   phone: string | null
   role: UserRole
+  /**
+   * Only a preceptor has one: 'pending' until an administrator approves
+   * the account, and null for everyone else.
+   */
+  preceptor_status?: PreceptorStatus | null
+  approved_by?: string | null
+  approved_at?: string | null
   // Where this person belongs: a zone and a center. The center's city is
   // copied onto the profile so it can be shown without another lookup.
   zone_id: string | null

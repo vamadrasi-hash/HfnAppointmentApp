@@ -6,6 +6,7 @@ import type {
   Profile,
   AppNotification,
   AreaGroup,
+  PreceptorStatus,
   AvailabilitySlot,
   AvailableSlot,
   CenterGroup,
@@ -164,6 +165,48 @@ export async function saveHomePlace(
     { onConflict: 'profile_id' },
   )
   if (error) throw error
+}
+
+// ------------------------------------------------------------------
+// PRECEPTOR APPROVAL (admins only; RLS enforces that)
+// ------------------------------------------------------------------
+
+/**
+ * Everyone who signed up as a preceptor, whatever the administrators have
+ * decided so far. Those still waiting come first — that is the queue an
+ * admin is here to clear.
+ */
+export async function getPreceptorApprovals(): Promise<Profile[]> {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('role', 'preceptor')
+    .order('created_at', { ascending: true })
+  if (error) throw error
+
+  const rank: Record<string, number> = { pending: 0, approved: 1, rejected: 2 }
+  return (data ?? []).sort(
+    (a, b) => (rank[a.preceptor_status ?? 'pending'] ?? 3) - (rank[b.preceptor_status ?? 'pending'] ?? 3),
+  )
+}
+
+/**
+ * Approve, reject, or put a preceptor account back in the queue. Only an
+ * admin gets past the database guard; `approved_by` and `approved_at` are
+ * stamped there rather than here.
+ */
+export async function setPreceptorStatus(
+  profileId: string,
+  status: PreceptorStatus,
+): Promise<Profile> {
+  const { data, error } = await supabase
+    .from('profiles')
+    .update({ preceptor_status: status, updated_at: new Date().toISOString() })
+    .eq('id', profileId)
+    .select('*')
+    .single()
+  if (error) throw error
+  return data
 }
 
 // ------------------------------------------------------------------

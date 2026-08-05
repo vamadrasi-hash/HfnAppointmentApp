@@ -1,5 +1,5 @@
 -- =====================================================================
--- 008 — Asking outside the schedule, being told about it, and looking
+-- 009 — Asking outside the schedule, being told about it, and looking
 --       further ahead than one day.
 --
 -- Three things change here.
@@ -10,7 +10,9 @@
 --    booking no longer has to point at a slot: `bookings.slot_id` becomes
 --    nullable and the asked-for time is carried on the booking itself.
 --    Auto-confirm deliberately does NOT apply to these — a time nobody
---    published is always the preceptor's to accept by hand.
+--    published is always the preceptor's to accept by hand. Approval (008)
+--    comes first either way: an unapproved preceptor is neither listed nor
+--    askable.
 --
 -- 2. **Notifications.** A small per-person inbox, written by triggers on
 --    `bookings`: the preceptor hears about every request, the abhyasi
@@ -20,7 +22,7 @@
 --    `find_available_slots` over a span of dates instead of one, which is
 --    what "next available time" and "who is free near here at all" need.
 --
--- Run this ONCE in the Supabase SQL Editor, after 007.
+-- Run this ONCE in the Supabase SQL Editor, after 008.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -70,6 +72,7 @@ declare
   slot_preceptor uuid;
   precep_auto    boolean;
   precep_open    boolean;
+  precep_status  preceptor_status;
 begin
   if new.slot_id is not null then
     select preceptor_id into slot_preceptor from availability_slots where id = new.slot_id;
@@ -100,6 +103,15 @@ begin
   end if;
 
   if new.requested_at is null then new.requested_at := now(); end if;
+
+  -- Approval, kept from 008 and now covering both kinds. Search already
+  -- hides an unapproved preceptor and they cannot publish a slot; this
+  -- catches a slot published before an approval was withdrawn, and any
+  -- request asked of them directly.
+  select preceptor_status into precep_status from profiles where id = new.preceptor_id;
+  if precep_status is distinct from 'approved' then
+    raise exception 'This preceptor is not approved to give sittings yet.';
+  end if;
 
   -- Auto-confirm is a promise about times the preceptor published, so it
   -- applies to slot bookings only.
@@ -397,7 +409,9 @@ as $fn$
   join availability_slots s
     on s.is_active = true
    and s.day_of_week = extract(dow from span.on_date)::int
-  join profiles p on p.id = s.preceptor_id
+  -- Only approved preceptors are findable, exactly as in the single-day
+  -- search. (An admin's status is stamped 'approved' when their role is.)
+  join profiles p on p.id = s.preceptor_id and p.preceptor_status = 'approved'
   left join centers c on c.id = s.center_id
   left join heartspots h on h.id = s.heartspot_id
   left join home_places hp on hp.profile_id = s.preceptor_id
@@ -449,6 +463,7 @@ as $fn$
   left join centers c on c.id = p.center_id
   left join home_places hp on hp.profile_id = p.id
   where p.role in ('preceptor', 'admin')
+    and p.preceptor_status = 'approved'
     and coalesce(p.accepts_open_requests, false) = true;
 $fn$;
 

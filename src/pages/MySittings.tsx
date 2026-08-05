@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Phone, Inbox, Info, Check, X, CalendarClock, CalendarPlus, UserX } from 'lucide-react'
+import {
+  Phone,
+  Inbox,
+  Info,
+  Check,
+  X,
+  CalendarClock,
+  CalendarPlus,
+  Clock3,
+  UserX,
+} from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import {
   getMySittings,
@@ -12,6 +22,7 @@ import {
   markNoShow,
 } from '../lib/api'
 import type { BookingDetail } from '../lib/types'
+import { isApprovedPreceptor, isPendingPreceptor, isPreceptorRole } from '../lib/roles'
 import { Avatar, Badge, Button, Card, EmptyState, PageLoader, SectionTitle } from '../components/ui'
 import { Modal } from '../components/Modal'
 import { PlaceLine } from '../components/PlaceLine'
@@ -138,7 +149,11 @@ function SittingCard({
 
 export default function MySittings() {
   const { user, profile } = useAuth()
-  const isPreceptor = profile?.role === 'preceptor' || profile?.role === 'admin'
+  // Nobody can request a sitting with a preceptor who is still waiting on
+  // an administrator, so there is nothing incoming to show them yet.
+  const canGiveSittings = isApprovedPreceptor(profile)
+  const awaitingApproval = isPendingPreceptor(profile)
+  const isPreceptor = isPreceptorRole(profile)
 
   const [items, setItems] = useState<BookingDetail[]>([])
   const [loading, setLoading] = useState(true)
@@ -168,9 +183,9 @@ export default function MySittings() {
   }, [user])
 
   useEffect(() => {
-    if (isPreceptor) load()
+    if (canGiveSittings) load()
     else setLoading(false)
-  }, [isPreceptor, load])
+  }, [canGiveSittings, load])
 
   async function run(id: string, fn: () => Promise<void>) {
     setBusyId(id)
@@ -220,14 +235,26 @@ export default function MySittings() {
     )
   }
 
-  if (!isPreceptor) {
+  if (!canGiveSittings) {
     return (
       <div className="space-y-4">
         <h1 className="font-serif text-2xl text-ink-900">Incoming sittings</h1>
         <EmptyState
-          icon={<Info className="h-8 w-8" />}
-          title="For preceptors only"
-          subtitle="This is where preceptors see and confirm the sittings people request with them."
+          icon={awaitingApproval ? <Clock3 className="h-8 w-8" /> : <Info className="h-8 w-8" />}
+          title={
+            awaitingApproval
+              ? 'Waiting for approval'
+              : isPreceptor
+                ? 'Your preceptor account was not approved'
+                : 'For preceptors only'
+          }
+          subtitle={
+            awaitingApproval
+              ? 'Requests can only reach you once an administrator has approved your preceptor account.'
+              : isPreceptor
+                ? 'You can still book sittings with other preceptors. If you believe this is a mistake, speak to your center’s coordinator.'
+                : 'This is where preceptors see and confirm the sittings people request with them.'
+          }
           action={
             <Link to="/find">
               <Button variant="secondary">Find a sitting</Button>

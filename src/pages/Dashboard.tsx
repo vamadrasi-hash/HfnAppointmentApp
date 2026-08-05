@@ -7,10 +7,18 @@ import {
   ShieldCheck,
   ArrowRight,
   CalendarCheck,
+  Clock3,
+  UserCheck,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { getMyBookings, upsertProfile } from '../lib/api'
 import type { BookingDetail } from '../lib/types'
+import {
+  isAdmin as isAdminRole,
+  isApprovedPreceptor,
+  isPendingPreceptor,
+  roleLabel,
+} from '../lib/roles'
 import { Badge, Card, SectionTitle, Toggle } from '../components/ui'
 import { PlaceLine } from '../components/PlaceLine'
 import { bookingTimes, formatTimeRange, prettyDate, isPastDate } from '../lib/utils'
@@ -51,8 +59,9 @@ function QuickAction({
 
 export default function Dashboard() {
   const { user, profile, setProfile } = useAuth()
-  const isPreceptor = profile?.role === 'preceptor' || profile?.role === 'admin'
-  const isAdmin = profile?.role === 'admin'
+  const canGiveSittings = isApprovedPreceptor(profile)
+  const awaitingApproval = isPendingPreceptor(profile)
+  const isAdmin = isAdminRole(profile)
 
   const [next, setNext] = useState<BookingDetail | null>(null)
   const [loaded, setLoaded] = useState(false)
@@ -100,15 +109,25 @@ export default function Dashboard() {
         <p className="text-sm text-ink-500">{greeting()},</p>
         <h1 className="font-serif text-2xl text-ink-900">{firstName} 🙏</h1>
         <div className="mt-2">
-          <Badge tone={isPreceptor ? 'gold' : 'brand'}>
-            {profile?.role === 'admin'
-              ? 'Administrator'
-              : profile?.role === 'preceptor'
-                ? 'Preceptor'
-                : 'Abhyasi'}
+          <Badge tone={awaitingApproval ? 'amber' : canGiveSittings ? 'gold' : 'brand'}>
+            {roleLabel(profile)}
           </Badge>
         </div>
       </div>
+
+      {/* Signed up as a preceptor, still waiting on an administrator */}
+      {awaitingApproval && (
+        <Card className="border-amber-200 bg-amber-50/60">
+          <p className="inline-flex items-center gap-2 font-semibold text-amber-800">
+            <Clock3 className="h-4 w-4" /> Awaiting approval
+          </p>
+          <p className="mt-1 text-sm text-amber-800">
+            An administrator is reviewing your preceptor account. Once it is approved you can
+            publish your schedule and take sitting requests. In the meantime you can request
+            sittings with other preceptors.
+          </p>
+        </Card>
+      )}
 
       {/* Next sitting */}
       {loaded && next && (
@@ -139,8 +158,10 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Open to being asked outside the schedule */}
-      {isPreceptor && (
+      {/* Open to being asked outside the schedule. Only once approved:
+          until then nobody can request a sitting at all, so there is
+          nothing for the switch to open up. */}
+      {canGiveSittings && (
         <Card className="space-y-2">
           <Toggle
             checked={openRequests}
@@ -168,7 +189,7 @@ export default function Dashboard() {
             subtitle="Browse preceptors and request a time"
           />
 
-          {isPreceptor && (
+          {canGiveSittings && (
             <>
               <QuickAction
                 to="/availability"
@@ -186,17 +207,25 @@ export default function Dashboard() {
           )}
 
           {isAdmin && (
-            <QuickAction
-              to="/admin"
-              icon={<ShieldCheck className="h-5 w-5" />}
-              title="Master data"
-              subtitle="Zones, centers and heartspots"
-            />
+            <>
+              <QuickAction
+                to="/admin/preceptors"
+                icon={<UserCheck className="h-5 w-5" />}
+                title="Preceptor approvals"
+                subtitle="Approve who may give sittings"
+              />
+              <QuickAction
+                to="/admin"
+                icon={<ShieldCheck className="h-5 w-5" />}
+                title="Master data"
+                subtitle="Zones, centers and heartspots"
+              />
+            </>
           )}
         </div>
       </div>
 
-      {isPreceptor && (
+      {canGiveSittings && (
         <p className="px-1 text-center text-xs text-ink-400">
           As a preceptor you can both give sittings and book sittings with others.
         </p>

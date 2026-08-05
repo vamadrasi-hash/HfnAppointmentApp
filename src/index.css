@@ -17,11 +17,17 @@ body {
   font-family: 'Inter', system-ui, sans-serif;
   /* a soft, calm field — like early light on water */
   background:
-    radial-gradient(1200px 480px at 50% -10%, #e6f6f2 0%, rgba(230, 246, 242, 0) 60%),
-    #f3faf8;
-  color: #16302e;
+    radial-gradient(1100px 520px at 50% -12%, #e6ecf8 0%, rgba(230, 236, 248, 0) 62%),
+    #f7f8fc;
+  color: #1e2438;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+/* Selection picks up the brand rather than the browser default blue. */
+::selection {
+  background: #d4dded;
+  color: #252f4a;
 }
 
 /* Respect users who prefer less motion. */
@@ -66,7 +72,7 @@ button {
 .pac-container {
   z-index: 60;
   border-radius: 0.75rem;
-  border-color: #d7e6e2;
+  border-color: #d4dded;
   font-family: inherit;
 }
 

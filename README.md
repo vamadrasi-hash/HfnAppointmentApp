@@ -32,7 +32,7 @@ This guide assumes **no prior experience** with coding tools, command lines, or 
 ## 1. What the app does
 
 **For abhyasis (practitioners):**
-- Sign in with Google or email.
+- Sign in with Google or email — nothing to approve, they can start requesting sittings right away.
 - Pick a day, then filter preceptors by zone, by city/center, or by time of day.
 - See each preceptor's open times and how many places remain (for example, "1 of 4 left").
 - See **where** each sitting happens — the heartspot or the preceptor's home — with the address and a **Directions** link. A preceptor's home address appears only once they have confirmed your sitting.
@@ -44,7 +44,7 @@ This guide assumes **no prior experience** with coding tools, command lines, or 
 - Be **notified** when a request is confirmed, declined, cancelled, or answered with another time.
 
 **For preceptors (trainers):**
-- Everything an abhyasi can do (preceptors can also book sittings with others), **plus**:
+- Everything an abhyasi can do (preceptors can also book sittings with others), **plus**, once an admin has approved the account:
 - Set their weekly availability — day, start and end time, **how many people can join**, and where the sitting happens. A time that repeats can be set for **several days at once**, and the end time follows the start by 30 minutes.
 - Choose the place per slot: a **heartspot** of their center, or **their own home**. The home address is entered once on the Profile screen (with a Google location they pin on a map) and stays private until they confirm a sitting.
 - Optionally **accept requests outside their schedule** — which also puts them in "Near me" on days they hold no slot.
@@ -53,6 +53,7 @@ This guide assumes **no prior experience** with coding tools, command lines, or 
 - See who has booked (with the person's phone number) and mark a sitting as completed or cancelled.
 
 **For admins:**
+- **Approve preceptors.** Anyone can sign up as one; nothing they publish reaches an abhyasi until an admin says yes.
 - An overview of all zones, cities, centers and heartspots — and the ability to **add, edit and delete centers and their heartspots**, including each one's address and map location.
 
 ---
@@ -265,6 +266,8 @@ To **stop** the app later, click the Terminal window and press `Ctrl + C`. To st
 - You will be taken to a short **welcome screen** to enter your name, phone, and choose your **zone** and your **city / center**. Choose **Abhyasi** or **Preceptor**.
 - After that you land on the home screen.
 
+> Choosing **Preceptor** creates an account that waits for an administrator's approval before it can publish a schedule — see [Understanding roles](#understanding-roles). Choosing **Abhyasi** needs no approval at all. On your very first sign-in there is no admin yet to do the approving, so do Step J next.
+
 ---
 
 ## Step J — Make yourself an admin
@@ -277,7 +280,9 @@ The very first admin must be set by hand (this is a one-time security step). **D
    update profiles set role = 'admin' where email = 'you@example.com';
    ```
 3. Click **Run**.
-4. Refresh the app. You are now an admin and will see the **Master data** screen.
+4. Refresh the app. You are now an admin and will see the **Master data** and **Preceptor approvals** screens.
+
+> An admin is always treated as an approved preceptor, so this also clears your own account if you signed up as one. Everyone else who signs up as a preceptor now goes into your approvals queue.
 
 ---
 
@@ -288,15 +293,42 @@ There are three roles:
 | Role | Can book sittings | Can give sittings | Can edit Master data |
 |------|:---:|:---:|:---:|
 | **Abhyasi** (practitioner) | ✅ | — | — |
-| **Preceptor** (trainer) | ✅ | ✅ | — |
+| **Preceptor** (trainer) | ✅ | ✅ *(once approved)* | — |
 | **Admin** | ✅ | ✅ | ✅ |
 
-- During the welcome screen, a person can choose **Abhyasi** or **Preceptor** themselves so they can start using the app right away.
-- If you would rather **approve** preceptors yourself, ask everyone to sign up as **Abhyasi**, and then promote the real preceptors by running this in the SQL Editor (replace the email):
-  ```sql
-  update profiles set role = 'preceptor' where email = 'trainer@example.com';
-  ```
-- The same idea is used to add more admins.
+On the welcome screen a person chooses **Abhyasi** or **Preceptor** for themselves. What happens next is different for each.
+
+### An abhyasi is ready straight away
+
+Nothing to approve, nothing to wait for. They sign in, find preceptors, and start requesting sittings.
+
+### A preceptor waits for an admin
+
+Saying "I am a preceptor" is a claim about someone's role in the sangha, and the app has no way to check it — so a preceptor account is created **pending** and an administrator approves it.
+
+While an account is pending, the person can use the app like anyone else — they can find preceptors and request sittings — but they **cannot** publish a weekly schedule, and **no abhyasi sees them** in search. The app tells them so on the home screen and on their profile.
+
+**To approve someone:** open **Preceptor approvals** (on the home screen and on your profile, admins only). It opens on the **Waiting** list. Each person shows their name, email, phone and center, with three choices:
+
+| Choice | What it does |
+|---|---|
+| **Approve** | They can publish a schedule and take requests, and abhyasis find them in search. |
+| **Not a preceptor** | They keep their account and can still request sittings, but publish nothing. |
+| **Back to waiting** | Undoes either of the above. |
+
+Withdrawing an approval leaves sittings already confirmed alone — it only stops new requests and hides the preceptor from search.
+
+This is enforced by the database, not just by the screens: an unapproved preceptor's attempt to publish a slot is refused by a security rule, the search function never returns them, and a booking against an old slot of theirs is rejected. A signed-in person also cannot approve themselves — the same guard that stops them making themselves an admin ignores any approval they try to write.
+
+Administrators are always approved and are not listed on that screen.
+
+### Adding more admins
+
+The first admin is made by hand (Step J). After that, the same SQL adds more (replace the email):
+
+```sql
+update profiles set role = 'admin' where email = 'someone@example.com';
+```
 
 ---
 
@@ -343,9 +375,10 @@ Run the files in **`supabase/migrations/`** in the SQL Editor, in number order, 
 | `005_sitting_place_and_heartspots.sql` | Adds **heartspots** (a center's meditation places) and lets a slot say where the sitting happens — a heartspot or the preceptor's home, with an address and map location. Existing slots become heartspot sittings at the center they already had, and every center gets one starting heartspot named after it. |
 | `006_private_home_address.sql` | Moves a preceptor's **home address into its own table**, so it is readable only after they confirm a sitting (see below). Run it right after 005. |
 | `007_home_address_on_profile.sql` | Moves that address from the slot to the **profile** — a preceptor has one home, not one per weekly slot. Also takes `home_latitude` / `home_longitude` off `profiles`, closing a hole where any signed-in user could read where anyone else lived. |
-| `008_open_requests_and_notifications.sql` | Lets a preceptor **accept requests outside their schedule**, adds the **notifications** inbox, and adds the look-ahead search behind "next available time" and the by-area list. |
+| `008_preceptor_approval.sql` | Makes a **preceptor account wait for an admin's approval** before it can publish a schedule or take requests (see below). Everyone already registered as a preceptor is marked approved, so nothing in a running app stops working — only new sign-ups have to wait. |
+| `009_open_requests_and_notifications.sql` | Lets a preceptor **accept requests outside their schedule**, adds the **notifications** inbox, and adds the look-ahead search behind "next available time" and the by-area list. |
 
-A fresh `schema.sql` already includes 003–008 — the migrations are only for a database that already exists.
+A fresh `schema.sql` already includes 003–009 — the migrations are only for a database that already exists.
 
 ### Being asked for a time outside the schedule
 
@@ -355,7 +388,9 @@ When it is on, two things follow. The preceptor is listed in search, and in **Ne
 
 These requests are **never auto-confirmed**, even for a preceptor who has auto-confirm on. Auto-confirm is a promise about times you published; a time nobody published is always yours to accept by hand.
 
-The rule is enforced in the database, not on the screen: a request with no slot is refused unless that preceptor has opted in.
+An **unapproved** preceptor is not listed and cannot be asked, switch or no switch: approval comes first, everywhere.
+
+The rules are enforced in the database, not on the screen: a request with no slot is refused unless that preceptor has opted in and been approved.
 
 ### Notifications
 
@@ -397,6 +432,16 @@ The same table holds the home location an **abhyasi** saves for "near me". That 
 **"Near me" still works.** The search runs through a database function that can read the private row and hands back a coordinate rounded to two decimal places — about a kilometre. That is enough to sort preceptors by distance and not enough to find a house, so home sittings show an approximate distance (`~3 km`) rather than a precise one.
 
 A heartspot's address is public, as it should be — it is a place the whole centre already knows.
+
+### An abhyasi's profile asks for less
+
+A preceptor's details are meant to travel: abhyasis have to reach them, so their profile has a **Google location** picker (map, pin and Maps link) and a **Share on WhatsApp** button that sends their name, phone, address and map link to any chat.
+
+An abhyasi is never the destination of a sitting, so neither is on their profile. They see a plain address box and nothing else. "Near me" is unaffected — it asks the phone for its location when you tap it.
+
+### Every profile save says so
+
+Saving on the Profile screen ends in a confirmation you have to dismiss, for every role. A change is never left in doubt about whether it took.
 
 ### Zones, centers and heartspots
 
@@ -449,7 +494,9 @@ You don't need to read the code, but here is a map in case you're curious:
 
 ```
 heartfulness-ams/
-├── public/                 App icons (the teal lotus)
+├── assets/brand/           The Heartfulness artwork, as supplied            ← the originals
+├── public/                 Logo files and app icons, generated from it
+│                           (scripts/prepare_logos.py, then scripts/make_icons.py)
 ├── supabase/
 │   ├── schema.sql          Creates all tables, security rules, booking logic   ← run first
 │   ├── seed.sql            Gujarat zones, centers & their heartspots            ← run second

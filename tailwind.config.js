@@ -4,32 +4,32 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Calm teal — the spine of the brand
+        // The Heartfulness blue — the spine of the brand.
         brand: {
-          50: '#f0fdfa',
-          100: '#d7f5ef',
-          200: '#aee9df',
-          300: '#79d6c8',
-          400: '#43bbac',
-          500: '#1f9e90',
-          600: '#0f766e', // primary
-          700: '#0c5f59',
-          800: '#0d4d49',
-          900: '#0e403d',
+          50: '#f6f8fc',
+          100: '#e9eef7',
+          200: '#d4dded',
+          300: '#b0c0dd',
+          400: '#879bc6',
+          500: '#6579ac',
+          600: '#45598f', // primary — the colour of the logo
+          700: '#394a77',
+          800: '#2e3c60',
+          900: '#252f4a',
         },
-        // Warm light — used sparingly for highlights, like a diya
+        // Warm light — used sparingly for highlights, like a diya.
         gold: {
-          100: '#f7eed8',
-          200: '#ecd9a8',
-          400: '#d4ad5e',
-          500: '#c8a04d',
-          600: '#a9853a',
+          100: '#f8f2e6',
+          200: '#eee0c1',
+          400: '#cfb079',
+          500: '#bd9a5e',
+          600: '#8d6f39',
         },
         ink: {
-          900: '#16302e',
-          700: '#334b48',
-          500: '#5d736f',
-          400: '#8a9b97',
+          900: '#1e2438',
+          700: '#3f4760',
+          500: '#6b7389',
+          400: '#7f889f',
         },
       },
       fontFamily: {
@@ -37,8 +37,9 @@ export default {
         sans: ['Inter', 'system-ui', 'sans-serif'],
       },
       boxShadow: {
-        soft: '0 1px 2px rgba(16, 48, 46, 0.04), 0 8px 24px rgba(16, 48, 46, 0.06)',
-        lift: '0 8px 30px rgba(16, 48, 46, 0.12)',
+        // Barely-there lift; the layout should read as paper, not as chrome.
+        soft: '0 1px 2px rgba(30, 36, 56, 0.03), 0 6px 20px rgba(30, 36, 56, 0.05)',
+        lift: '0 10px 30px rgba(30, 36, 56, 0.10)',
       },
       borderRadius: {
         xl: '0.9rem',
@@ -46,7 +47,7 @@ export default {
       },
       keyframes: {
         breathe: {
-          '0%, 100%': { transform: 'scale(1)', opacity: '0.9' },
+          '0%, 100%': { transform: 'scale(1)', opacity: '0.75' },
           '50%': { transform: 'scale(1.06)', opacity: '1' },
         },
         'fade-up': {
