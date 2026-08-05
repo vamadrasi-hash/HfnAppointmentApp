@@ -8,9 +8,11 @@ import {
   ChevronRight,
   Mail,
   Lock,
+  MessageCircle,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { upsertProfile, saveHomePlace } from '../lib/api'
+import { buildProfileShareText, whatsappShareUrl } from '../lib/share'
 import { Avatar, Badge, Button, Card, Field, Input } from '../components/ui'
 import { ZoneCenterPicker, type ZoneCenterValue } from '../components/ZoneCenterPicker'
 import { LocationPicker, toPlaceValue, type PlaceValue } from '../components/LocationPicker'
@@ -78,6 +80,20 @@ export default function Profile() {
     }
   }
 
+  // Built from what is on screen, so edits are shared even before saving.
+  const shareText = buildProfileShareText({
+    fullName,
+    phone,
+    address: home.address,
+    latitude: home.latitude,
+    longitude: home.longitude,
+    map_url: home.map_url,
+  })
+
+  function shareOnWhatsApp() {
+    window.open(whatsappShareUrl(shareText), '_blank', 'noopener,noreferrer')
+  }
+
   async function handleSignOut() {
     await signOut()
     navigate('/login', { replace: true })
@@ -108,6 +124,34 @@ export default function Profile() {
             <Badge tone={isPreceptor ? 'gold' : 'brand'}>{roleLabel}</Badge>
           </div>
         </div>
+      </Card>
+
+      {/* Share my details on WhatsApp */}
+      <Card className="space-y-3">
+        <div>
+          <p className="text-sm font-semibold text-ink-700">Share my details</p>
+          <p className="mt-0.5 text-xs text-ink-500">
+            Sends your name, phone, address and map link to any WhatsApp chat.
+          </p>
+        </div>
+
+        <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-brand-100 bg-brand-50/50 px-3.5 py-2.5 font-sans text-xs leading-relaxed text-ink-600">
+          {shareText}
+        </pre>
+
+        <Button
+          full
+          onClick={shareOnWhatsApp}
+          className="border-transparent bg-[#25D366] text-white shadow-soft hover:bg-[#1da851] active:bg-[#128C7E]"
+        >
+          <MessageCircle className="h-4 w-4" /> Share on WhatsApp
+        </Button>
+
+        {!home.address.trim() && !home.latitude && !home.map_url && (
+          <p className="text-xs text-amber-700">
+            Add your home address and Google location below to include them.
+          </p>
+        )}
       </Card>
 
       {/* Quick links */}
