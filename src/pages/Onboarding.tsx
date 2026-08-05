@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { MapPin, Loader2, Check } from 'lucide-react'
+import { MapPin, Loader2, Check, Clock3 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { upsertProfile, saveHomePlace } from '../lib/api'
 import type { UserRole } from '../lib/types'
@@ -128,7 +128,7 @@ export default function Onboarding() {
           hint={
             role === 'preceptor'
               ? 'Preceptors can give sittings and also book sittings with others.'
-              : 'Abhyasis book sittings with preceptors.'
+              : 'Abhyasis book sittings with preceptors — nothing else to set up.'
           }
         >
           <Select value={role} onChange={(e) => setRole(e.target.value as UserRole)}>
@@ -136,6 +136,18 @@ export default function Onboarding() {
             <option value="preceptor">Preceptor (trainer)</option>
           </Select>
         </Field>
+
+        {/* Saying "I am a preceptor" is a claim the app cannot check, so an
+            administrator does. Better said here than discovered later. */}
+        {role === 'preceptor' && (
+          <p className="flex items-start gap-2 rounded-xl border border-amber-100 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-800">
+            <Clock3 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              An administrator approves preceptor accounts before they can publish a schedule and
+              receive sitting requests. You can use the app and request sittings straight away.
+            </span>
+          </p>
+        )}
 
         <div className="border-t border-brand-50 pt-4">
           <p className="mb-3 text-sm font-medium text-ink-700">Where you belong</p>

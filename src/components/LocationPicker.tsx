@@ -40,6 +40,12 @@ interface Props {
   addressLabel?: string
   addressHint?: string
   addressPlaceholder?: string
+  /**
+   * The map, the pin and the "paste a Google Maps link" box. Off leaves
+   * just the address, for a place nobody has to be given directions to —
+   * an abhyasi's own home, which is theirs alone.
+   */
+  showGoogleLocation?: boolean
 }
 
 // Roughly the middle of India, so an unset map opens somewhere sensible.
@@ -59,6 +65,7 @@ export function LocationPicker({
   addressLabel = 'Address',
   addressHint,
   addressPlaceholder = 'Building, street, area, landmark…',
+  showGoogleLocation = true,
 }: Props) {
   const [panelOpen, setPanelOpen] = useState(false)
   const [mapState, setMapState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
@@ -280,6 +287,7 @@ export function LocationPicker({
         </button>
       )}
 
+      {showGoogleLocation && (
       <div>
         <p className="mb-1.5 text-sm font-medium text-ink-700">Google location</p>
 
@@ -416,6 +424,7 @@ export function LocationPicker({
           </p>
         )}
       </div>
+      )}
     </div>
   )
 }

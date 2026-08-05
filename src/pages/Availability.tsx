@@ -1,6 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, Pencil, Trash2, Clock, Users, Info, CalendarPlus, Home, MapPin } from 'lucide-react'
+import {
+  Plus,
+  Pencil,
+  Trash2,
+  Clock,
+  Clock3,
+  Users,
+  Info,
+  CalendarPlus,
+  Home,
+  MapPin,
+} from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { getMySlots, createSlot, updateSlot, deleteSlot } from '../lib/api'
 import type { AvailabilitySlot, Center, Heartspot, SittingPlaceType } from '../lib/types'
@@ -13,6 +24,7 @@ import {
   loadMasterData,
 } from '../lib/masterData'
 import { MY_HOME_PLACE_NAME, resolvePlace } from '../lib/place'
+import { isApprovedPreceptor, isPendingPreceptor, isPreceptorRole } from '../lib/roles'
 import { hasLocation } from '../lib/geo'
 import { Badge, Button, Card, EmptyState, Field, Input, PageLoader, Select } from '../components/ui'
 import { Combobox, type ComboOption } from '../components/Combobox'
@@ -51,7 +63,11 @@ const withSeconds = (t: string) => (t.length === 5 ? `${t}:00` : t)
 
 export default function Availability() {
   const { user, profile } = useAuth()
-  const isPreceptor = profile?.role === 'preceptor' || profile?.role === 'admin'
+  // Publishing availability is what needs the approval, so that — not the
+  // role on its own — is what opens this screen.
+  const canGiveSittings = isApprovedPreceptor(profile)
+  const awaitingApproval = isPendingPreceptor(profile)
+  const isPreceptor = isPreceptorRole(profile)
 
   const [slots, setSlots] = useState<AvailabilitySlot[]>([])
   const [centers, setCenters] = useState<Center[]>([])
@@ -88,9 +104,9 @@ export default function Availability() {
   }, [user, profile?.home_place])
 
   useEffect(() => {
-    if (isPreceptor) load()
+    if (canGiveSittings) load()
     else setLoading(false)
-  }, [isPreceptor, load])
+  }, [canGiveSittings, load])
 
   // The same searchable "City / Center" list the profile screens use.
   const centerOptions = useMemo<ComboOption[]>(
@@ -227,14 +243,26 @@ export default function Availability() {
     }
   }
 
-  if (!isPreceptor) {
+  if (!canGiveSittings) {
     return (
       <div className="space-y-4">
         <h1 className="font-serif text-2xl text-ink-900">My schedule</h1>
         <EmptyState
-          icon={<Info className="h-8 w-8" />}
-          title="Only preceptors set availability"
-          subtitle="Your account is registered as an abhyasi. If you serve as a preceptor, an administrator can update your role."
+          icon={isPreceptor ? <Clock3 className="h-8 w-8" /> : <Info className="h-8 w-8" />}
+          title={
+            awaitingApproval
+              ? 'Waiting for approval'
+              : isPreceptor
+                ? 'Your preceptor account was not approved'
+                : 'Only preceptors set availability'
+          }
+          subtitle={
+            awaitingApproval
+              ? 'An administrator has to approve your preceptor account before you can publish times. You will find your schedule here as soon as that happens.'
+              : isPreceptor
+                ? 'You can still book sittings with other preceptors. If you believe this is a mistake, speak to your center’s coordinator.'
+                : 'Your account is registered as an abhyasi. If you serve as a preceptor, an administrator can update your role.'
+          }
           action={
             <Link to="/find">
               <Button variant="secondary">Find a sitting instead</Button>
