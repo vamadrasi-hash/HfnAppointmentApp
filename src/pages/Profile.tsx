@@ -9,6 +9,7 @@ import {
   Mail,
   Lock,
   MessageCircle,
+  Copy,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { upsertProfile, saveHomePlace } from '../lib/api'
@@ -36,6 +37,8 @@ export default function Profile() {
   const [home, setHome] = useState<PlaceValue>(toPlaceValue(profile?.home_place ?? {}))
 
   const [autoConfirm, setAutoConfirm] = useState(profile?.auto_confirm ?? false)
+
+  const [copied, setCopied] = useState(false)
 
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -94,6 +97,16 @@ export default function Profile() {
     window.open(whatsappShareUrl(shareText), '_blank', 'noopener,noreferrer')
   }
 
+  async function copyShareText() {
+    try {
+      await navigator.clipboard.writeText(shareText)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 2000)
+    } catch {
+      /* an old browser without clipboard access — the text is on screen to select */
+    }
+  }
+
   async function handleSignOut() {
     await signOut()
     navigate('/login', { replace: true })
@@ -139,13 +152,18 @@ export default function Profile() {
           {shareText}
         </pre>
 
-        <Button
-          full
-          onClick={shareOnWhatsApp}
-          className="border-transparent bg-[#25D366] text-white shadow-soft hover:bg-[#1da851] active:bg-[#128C7E]"
-        >
-          <MessageCircle className="h-4 w-4" /> Share on WhatsApp
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            onClick={shareOnWhatsApp}
+            className="flex-1 border-transparent bg-[#25D366] text-white shadow-soft hover:bg-[#1da851] active:bg-[#128C7E]"
+          >
+            <MessageCircle className="h-4 w-4" /> Share on WhatsApp
+          </Button>
+          <Button variant="secondary" onClick={copyShareText}>
+            {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+            {copied ? 'Copied' : 'Copy'}
+          </Button>
+        </div>
 
         {!home.address.trim() && !home.latitude && !home.map_url && (
           <p className="text-xs text-amber-700">
