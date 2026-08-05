@@ -104,6 +104,23 @@ export function bookingTimes(b: {
   return null
 }
 
+// ---- Mobile numbers ---------------------------------------------------
+// A preceptor is given the abhyasi's number so they can reach them about
+// the sitting — an out-of-schedule request is often settled by a call. So
+// it has to be a number that can actually be rung, which is why it is
+// asked for at registration rather than left to be filled in later.
+export function phoneDigits(phone: string | null | undefined): string {
+  return (phone ?? '').replace(/\D/g, '')
+}
+
+/** Ten digits or more, and no longer than an international number. */
+export function isUsablePhone(phone: string | null | undefined): boolean {
+  const digits = phoneDigits(phone)
+  return digits.length >= 10 && digits.length <= 15
+}
+
+export const PHONE_HELP = 'Please enter your mobile number — at least 10 digits.'
+
 // ---- Dates ------------------------------------------------------------
 export const ISO_DATE = 'yyyy-MM-dd'
 

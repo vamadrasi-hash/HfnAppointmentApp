@@ -1,8 +1,10 @@
+import { useEffect } from 'react'
 import { Outlet, useNavigate } from 'react-router-dom'
 import { Bell } from 'lucide-react'
 import { BottomNav } from './BottomNav'
 import { useAuth } from '../context/AuthContext'
 import { useUnreadNotifications } from '../lib/notifications'
+import { registerForBackgroundPush } from '../lib/push'
 import { Avatar } from './ui'
 import { HeartfulnessMark, HeartfulnessWordmark } from './Logo'
 
@@ -10,6 +12,13 @@ export function Layout() {
   const { user, profile } = useAuth()
   const navigate = useNavigate()
   const { count: unread } = useUnreadNotifications(user?.id)
+
+  // Somebody who has already said yes keeps their push subscription
+  // fresh — browsers retire them, and a new device is a new one. Asking
+  // happens on the notifications screen; this only renews.
+  useEffect(() => {
+    if (user?.id) void registerForBackgroundPush(user.id)
+  }, [user?.id])
 
   return (
     <div className="mx-auto flex min-h-full max-w-md flex-col">

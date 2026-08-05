@@ -83,17 +83,23 @@ function SittingCard({
             {isOpenRequest && (
               <p className="mt-1 inline-flex items-center gap-1.5 rounded-lg bg-gold-100/60 px-2.5 py-1 text-xs text-gold-600">
                 <CalendarPlus className="h-3 w-3" />
-                Asked for outside your schedule — agree the place when you confirm.
+                {isRequested
+                  ? 'Asked for outside your schedule — confirm this time or propose another, and agree the place when you do.'
+                  : 'Asked for outside your schedule.'}
               </p>
             )}
           </div>
-          {b.abhyasi?.phone && (
+          {/* The abhyasi's mobile, so an out-of-schedule time can be
+              settled with a call rather than a round of messages. */}
+          {b.abhyasi?.phone ? (
             <a
               href={`tel:${b.abhyasi.phone}`}
-              className="mt-1 inline-flex items-center gap-1 text-sm font-medium text-brand-600"
+              className="mt-1.5 inline-flex items-center gap-1.5 rounded-lg bg-brand-50 px-2.5 py-1 text-sm font-medium text-brand-700 hover:bg-brand-100"
             >
               <Phone className="h-3.5 w-3.5" /> {b.abhyasi.phone}
             </a>
+          ) : (
+            <p className="mt-1.5 text-xs text-ink-400">No mobile number on their profile.</p>
           )}
           {b.note && <p className="mt-2 text-sm text-ink-500">“{b.note}”</p>}
           {isAlternate && b.alternate_date && (

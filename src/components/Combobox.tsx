@@ -114,7 +114,15 @@ export function Combobox({
       ?.scrollIntoView({ block: 'nearest' })
   }, [active, open])
 
-  function pick(v: string) {
+  /**
+   * Choosing closes the list. `preventDefault` is not decoration: a
+   * `<label>` anywhere above this box would otherwise hand the tap on to
+   * the first control inside it — this box's own button — and the list
+   * would spring straight back open. Our own fields are plain elements
+   * (see ui.tsx `Field`), but this makes the box safe to drop anywhere.
+   */
+  function pick(v: string, e?: { preventDefault: () => void }) {
+    e?.preventDefault()
     onChange(v)
     setOpen(false)
   }
@@ -162,8 +170,7 @@ export function Combobox({
             aria-label="Clear selection"
             onClick={(e) => {
               e.stopPropagation()
-              onChange('')
-              setOpen(false)
+              pick('', e)
             }}
             className="rounded-full p-0.5 text-ink-400 hover:bg-brand-50 hover:text-ink-600"
           >
@@ -207,7 +214,7 @@ export function Combobox({
                     aria-selected={row.option.value === value}
                     data-active={row.index === active}
                     onMouseEnter={() => setActive(row.index)}
-                    onClick={() => pick(row.option.value)}
+                    onClick={(e) => pick(row.option.value, e)}
                     className={cx(
                       'flex w-full items-center gap-2 px-3.5 py-2 text-left text-sm',
                       row.index === active ? 'bg-brand-50 text-ink-900' : 'text-ink-700',

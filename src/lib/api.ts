@@ -134,6 +134,29 @@ export async function upsertProfile(p: Partial<Profile> & { id: string }): Promi
 }
 
 /**
+ * Change a few columns and leave the rest alone.
+ *
+ * Not `upsertProfile`: an upsert is an insert that falls back to an update,
+ * so Postgres builds the whole row first and a partial one trips
+ * `full_name`'s not-null rule before it ever gets as far as the conflict.
+ * Everything that edits an existing profile — a switch on the dashboard,
+ * say — belongs here.
+ */
+export async function updateProfile(
+  id: string,
+  patch: Partial<Omit<Profile, 'id' | 'home_place'>>,
+): Promise<Profile> {
+  const { data, error } = await supabase
+    .from('profiles')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select(`*, ${HOME_PLACE_EMBED}`)
+    .single()
+  if (error) throw error
+  return { ...data, home_place: onePlace((data as any).home_place) }
+}
+
+/**
  * Where this person lives. Kept out of `profiles` because that table is
  * readable by every signed-in user; this one is readable by the person
  * themselves, an admin, and an abhyasi whose sitting at that preceptor's
@@ -684,11 +707,29 @@ export async function proposeAlternate(
 }
 
 // ---- Abhyasi responding to a proposed alternate ----
-export async function acceptAlternate(bookingId: string, alternateDate: string): Promise<void> {
-  const { error } = await supabase
-    .from('bookings')
-    .update({ status: 'confirmed', booking_date: alternateDate })
-    .eq('id', bookingId)
+/**
+ * A booking made against a published slot takes its time from that slot,
+ * so accepting a new time only moves the date. A request made outside the
+ * schedule carries its own time, and that is what every screen reads back
+ * — so the accepted time has to be written onto the booking too, or the
+ * abhyasi would go on being shown the hour they originally asked for.
+ */
+export async function acceptAlternate(b: {
+  id: string
+  slot_id: string | null
+  alternate_date?: string | null
+  alternate_start_time?: string | null
+  alternate_end_time?: string | null
+}): Promise<void> {
+  const patch: Record<string, unknown> = {
+    status: 'confirmed',
+    booking_date: b.alternate_date,
+  }
+  if (!b.slot_id && b.alternate_start_time) {
+    patch.requested_start_time = b.alternate_start_time
+    patch.requested_end_time = b.alternate_end_time ?? null
+  }
+  const { error } = await supabase.from('bookings').update(patch).eq('id', b.id)
   if (error) throw error
 }
 

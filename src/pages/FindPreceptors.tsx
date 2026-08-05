@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   SlidersHorizontal,
   Navigation,
@@ -28,6 +29,7 @@ import {
   DEFAULT_SITTING_MINUTES,
   addMinutesToTime,
   durationMinutes,
+  isUsablePhone,
   upcomingDates,
   prettyDate,
   formatTimeRange,
@@ -43,6 +45,9 @@ const TIME_BANDS: Record<Exclude<TimeBand, ''>, { from: string; to: string }> = 
 }
 
 const EMPTY_RESULT: AvailabilitySearch = { onDate: [], next: null, areas: [] }
+
+const NEEDS_PHONE =
+  'Add your mobile number in your profile first — the preceptor is shown it so they can reach you about the sitting.'
 
 export default function FindPreceptors() {
   const { user, profile } = useAuth()
@@ -82,6 +87,25 @@ export default function FindPreceptors() {
 
   const activeFilterCount = (place.zoneId ? 1 : 0) + (place.centerId ? 1 : 0) + (band ? 1 : 0)
 
+  // The preceptor is given this number when they answer, so a request
+  // cannot be sent without one. Everyone who registers now gives it; this
+  // catches accounts made before it was asked for.
+  const hasPhone = isUsablePhone(profile?.phone)
+
+  // Nearest first is the order that makes sense for a list of people you
+  // might travel to, so we sort by distance whenever we can work one out —
+  // from the phone when "near me" is on, and otherwise from the home
+  // location on the profile.
+  const home = profile?.home_place
+  const savedOrigin = useMemo(
+    () =>
+      home?.latitude != null && home?.longitude != null
+        ? { lat: home.latitude, lng: home.longitude }
+        : null,
+    [home?.latitude, home?.longitude],
+  )
+  const searchOrigin = nearMe ? origin : savedOrigin
+
   const runSearch = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -92,7 +116,7 @@ export default function FindPreceptors() {
         centerId: place.centerId || undefined,
         fromTime: band ? TIME_BANDS[band].from : undefined,
         toTime: band ? TIME_BANDS[band].to : undefined,
-        origin: nearMe ? origin : null,
+        origin: searchOrigin,
         // Look across the whole strip of dates in one go, so "the next
         // available time" and the by-area list cost no extra round trip.
         windowStart: dates[0].iso,
@@ -105,7 +129,7 @@ export default function FindPreceptors() {
     } finally {
       setLoading(false)
     }
-  }, [date, place.zoneId, place.centerId, band, nearMe, origin, dates])
+  }, [date, place.zoneId, place.centerId, band, searchOrigin, dates])
 
   // Re-run whenever the date, any filter, or the location changes.
   useEffect(() => {
@@ -163,6 +187,10 @@ export default function FindPreceptors() {
 
   async function submitRequest() {
     if (!target || !user) return
+    if (!hasPhone) {
+      setBookError(NEEDS_PHONE)
+      return
+    }
     setBooking(true)
     setBookError(null)
     try {
@@ -209,6 +237,10 @@ export default function FindPreceptors() {
       setBookError('Pick the day and time you would like.')
       return
     }
+    if (!hasPhone) {
+      setBookError(NEEDS_PHONE)
+      return
+    }
     setBooking(true)
     setBookError(null)
     try {
@@ -241,15 +273,15 @@ export default function FindPreceptors() {
   // Preceptors open to being asked show up whatever the day, so "is there
   // anything on this day" has to count published times, not names.
   const withTimes = result.onDate.filter((p) => p.slots.length > 0)
+  const askableCount = result.onDate.length - withTimes.length
 
-  // "Nobody near me" is either nothing at all on this day, or — with near
-  // me on — nobody we could actually place on a map.
+  // "Nobody here" is either no one at all — published or askable — or,
+  // with near me on, nobody we could actually place on a map.
   const showAreas =
     !loading &&
     !error &&
-    (withTimes.length === 0 || (nearMe && withTimes.every((p) => p.distanceKm == null)))
-
-  const askableCount = result.onDate.length - withTimes.length
+    (result.onDate.length === 0 ||
+      (nearMe && result.onDate.every((p) => p.distanceKm == null)))
 
   return (
     <div className="space-y-4">
@@ -259,6 +291,17 @@ export default function FindPreceptors() {
           Pick a day, then request an open time. The preceptor confirms your sitting.
         </p>
       </div>
+
+      {/* Registered before a mobile number was asked for */}
+      {!hasPhone && (
+        <p className="rounded-xl border border-amber-100 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-800">
+          Add your mobile number in{' '}
+          <Link to="/profile" className="font-semibold underline">
+            your profile
+          </Link>{' '}
+          before requesting a sitting — the preceptor is shown it so they can reach you.
+        </p>
+      )}
 
       {/* Success banner */}
       {success && (
@@ -410,13 +453,27 @@ export default function FindPreceptors() {
         />
       ) : (
         <>
-          {withTimes.length > 0 ? (
+          {/* Everyone who can give a sitting on this day — the ones with a
+              published time, and the ones who will take a time of your
+              choosing. Nearest first whenever we know where you are. */}
+          {result.onDate.length > 0 ? (
             <div className="space-y-3">
               <p className="text-sm text-ink-500">
-                {withTimes.length} preceptor{withTimes.length > 1 ? 's' : ''} available on{' '}
-                <span className="font-medium text-ink-700">{prettyDate(date)}</span>
-                {askableCount > 0 &&
-                  `, and ${askableCount} more you can ask for a time`}
+                {withTimes.length > 0 ? (
+                  <>
+                    {withTimes.length} preceptor{withTimes.length > 1 ? 's' : ''} available on{' '}
+                    <span className="font-medium text-ink-700">{prettyDate(date)}</span>
+                    {askableCount > 0 && `, and ${askableCount} more you can ask for a time`}
+                  </>
+                ) : (
+                  <>
+                    Nobody has published a time on{' '}
+                    <span className="font-medium text-ink-700">{prettyDate(date)}</span>, but{' '}
+                    {askableCount} preceptor{askableCount > 1 ? 's take' : ' takes'} requests for a
+                    time of your choosing
+                  </>
+                )}
+                {searchOrigin && ', nearest first'}.
               </p>
               {result.onDate.map((p) => (
                 <PreceptorCard
@@ -424,6 +481,9 @@ export default function FindPreceptors() {
                   data={p}
                   onBook={openBooking}
                   onAskTime={openAsk}
+                  // Nothing on the day they picked, but something later in
+                  // the fortnight is still worth showing.
+                  showNextAvailable={p.slots.length === 0}
                 />
               ))}
             </div>
@@ -431,7 +491,7 @@ export default function FindPreceptors() {
             <EmptyState
               icon={<CalendarDays className="h-8 w-8" />}
               title="No open sittings"
-              subtitle={`No preceptors have published a time on ${prettyDate(date)} with these filters.${
+              subtitle={`No preceptors have published a time on ${prettyDate(date)} with these filters, and none here take requests outside their schedule.${
                 result.areas.length > 0 ? ' Here is everyone who is free soon.' : ''
               }`}
               action={
@@ -571,9 +631,16 @@ export default function FindPreceptors() {
               <p className="font-semibold text-ink-900">{askTarget.preceptor.full_name}</p>
               <p className="mt-1 inline-flex items-start gap-1.5 text-sm text-ink-600">
                 <CalendarPlus className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-500" />
-                Takes requests outside their published schedule. They confirm the time and where to
-                meet.
+                Takes requests outside their published schedule. They can accept the time you name
+                or propose another, and they settle where to meet.
               </p>
+              {profile?.phone && (
+                <p className="mt-2 text-xs text-ink-500">
+                  They will see your mobile number,{' '}
+                  <span className="font-medium text-ink-700">{profile.phone}</span>, so they can
+                  reach you.
+                </p>
+              )}
             </div>
 
             <label className="block">

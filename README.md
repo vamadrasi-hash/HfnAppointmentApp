@@ -377,14 +377,17 @@ Run the files in **`supabase/migrations/`** in the SQL Editor, in number order, 
 | `007_home_address_on_profile.sql` | Moves that address from the slot to the **profile** — a preceptor has one home, not one per weekly slot. Also takes `home_latitude` / `home_longitude` off `profiles`, closing a hole where any signed-in user could read where anyone else lived. |
 | `008_preceptor_approval.sql` | Makes a **preceptor account wait for an admin's approval** before it can publish a schedule or take requests (see below). Everyone already registered as a preceptor is marked approved, so nothing in a running app stops working — only new sign-ups have to wait. |
 | `009_open_requests_and_notifications.sql` | Lets a preceptor **accept requests outside their schedule**, adds the **notifications** inbox, and adds the look-ahead search behind "next available time" and the by-area list. |
+| `010_mobile_number_and_push.sql` | Makes a **mobile number part of registering** and puts it in the preceptor's notification, sends notifications out over **realtime** so the app can pop them up as they arrive, and adds the `push_subscriptions` table for pop-ups with the app closed. Accounts made before this keep working; they just cannot empty their number. |
 
-A fresh `schema.sql` already includes 003–009 — the migrations are only for a database that already exists.
+A fresh `schema.sql` already includes 003–010 — the migrations are only for a database that already exists.
 
 ### Being asked for a time outside the schedule
 
 A preceptor's schedule is the times they have published. Some are happy to be asked for others; the toggle **"Accept requests outside my schedule"** — on the Profile screen, and on the dashboard where it is easier to change week to week — is that choice.
 
-When it is on, two things follow. The preceptor is listed in search, and in **Near me**, even on a day they hold no slot; and an abhyasi can name a day and time themselves. Such a request has no slot behind it, so it carries its own time and no place — the preceptor settles where to meet when they confirm.
+When it is on, the preceptor is listed on **every** day of the search — including days when nobody at all has published a time, where they are the whole answer rather than a footnote to it. They are ordered nearest first, from the phone's location when **Near me** is on and otherwise from the home location on the seeker's own profile, so the closest preceptor who can be asked is the first one on the list.
+
+From there the seeker names a day and a time. Such a request has no slot behind it, so it carries its own time and no place. The preceptor sees it under **Incoming sittings** with the abhyasi's **mobile number** beside it, and either confirms the time as it stands or proposes another with **New time** — which the abhyasi then accepts or declines. Where to meet is settled when they confirm.
 
 These requests are **never auto-confirmed**, even for a preceptor who has auto-confirm on. Auto-confirm is a promise about times you published; a time nobody published is always yours to accept by hand.
 
@@ -403,9 +406,28 @@ The database writes a notification whenever something happens that someone shoul
 | The abhyasi | Their request is confirmed, declined, or cancelled |
 | The abhyasi | The preceptor proposes another time |
 
-They appear under the **bell** in the top bar, with a count of the unread ones. The count is refreshed when a screen is opened, when the tab regains focus, and once a minute — so it is never more than a minute stale, without holding a connection open.
+A request notification carries the abhyasi's **mobile number**, so the preceptor can answer without opening the app first.
+
+They appear under the **bell** in the top bar, with a count of the unread ones. The count is refreshed when a screen is opened, when the tab regains focus, and once a minute, and the app also listens for new rows over realtime — so an arrival usually lands at once, and never later than a minute.
 
 Nobody can write into anyone's inbox: the rows are written by a database trigger, and no one is granted permission to insert them.
+
+### Pop-up notifications
+
+Tapping **Allow notifications** on the Notifications screen turns the inbox into system pop-ups: a phone or desktop notification for every request, confirmation, decline and proposed time, tapping which opens the right screen.
+
+There are two halves to this, and only the first needs setting up at all:
+
+- **With the app open** — in a tab, in the background, or installed on a phone and running. This works as soon as the person allows it. Nothing to configure.
+- **With the app closed.** This is Web Push proper, and it needs a VAPID key pair and something to send with it. Everything is in the repository — `supabase/functions/send-push` and its README walk through making the keys, setting `VITE_VAPID_PUBLIC_KEY`, deploying the function and pointing a database webhook at it. Skip it and the first half still works.
+
+On an **iPhone**, Safari only allows notifications for an app added to the Home Screen (share menu → "Add to Home Screen"), on iOS 16.4 or newer. In an ordinary Safari tab the permission prompt never appears.
+
+### Everyone gives a mobile number
+
+Registering asks for a mobile number and will not go on without one. It is what the preceptor is shown when they answer a request — an out-of-schedule time is usually settled with a call — and nothing else: it is not on anyone's public profile, and only the preceptor giving a particular sitting sees the number of the abhyasi who asked for it.
+
+An account made before this rule can carry on without one, and is told to add it before requesting a sitting. It cannot be emptied once it is there.
 
 ### Finding a time when nothing is free today
 
@@ -500,7 +522,8 @@ heartfulness-ams/
 ├── supabase/
 │   ├── schema.sql          Creates all tables, security rules, booking logic   ← run first
 │   ├── seed.sql            Gujarat zones, centers & their heartspots            ← run second
-│   └── migrations/         Changes to apply if your database already exists
+│   ├── migrations/         Changes to apply if your database already exists
+│   └── functions/          Optional: send-push, for pop-ups with the app closed
 ├── src/
 │   ├── components/         Reusable pieces (buttons, cards, navigation, modals)
 │   ├── context/            Sign-in / sign-out handling

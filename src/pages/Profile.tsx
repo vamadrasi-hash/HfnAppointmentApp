@@ -29,6 +29,7 @@ import { Avatar, Badge, Button, Card, Field, Input, Toggle } from '../components
 import { Modal } from '../components/Modal'
 import { ZoneCenterPicker, type ZoneCenterValue } from '../components/ZoneCenterPicker'
 import { LocationPicker, toPlaceValue, type PlaceValue } from '../components/LocationPicker'
+import { PHONE_HELP, isUsablePhone } from '../lib/utils'
 
 export default function Profile() {
   const { user, profile, setProfile, signOut } = useAuth()
@@ -77,6 +78,12 @@ export default function Profile() {
       setError('Please enter your name.')
       return
     }
+    // The preceptor answering a request is shown this, so it cannot be
+    // dropped once it is there.
+    if (!isUsablePhone(phone)) {
+      setError(PHONE_HELP)
+      return
+    }
     setSaving(true)
     try {
       // The home address is a table of its own, so it saves separately.
@@ -89,7 +96,7 @@ export default function Profile() {
       const updated = await upsertProfile({
         id: user.id,
         full_name: fullName.trim(),
-        phone: phone.trim() || null,
+        phone: phone.trim(),
         zone_id: place.zoneId || null,
         center_id: place.centerId || null,
         city: place.city,
@@ -283,12 +290,17 @@ export default function Profile() {
           <Input value={fullName} onChange={(e) => setFullName(e.target.value)} />
         </Field>
 
-        <Field label="Phone number">
+        <Field
+          label="Mobile number"
+          hint="Required. The preceptor giving your sitting is shown this so they can reach you about it."
+        >
           <Input
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
             inputMode="tel"
+            autoComplete="tel"
             placeholder="e.g. 98xxxxxxxx"
+            required
           />
         </Field>
 
