@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import { Home, Search, CalendarCheck, CalendarClock, UserRound, type LucideIcon } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
+import { isApprovedPreceptor } from '../lib/roles'
 import { cx } from '../lib/utils'
 
 interface NavItem {
@@ -11,14 +12,16 @@ interface NavItem {
 
 export function BottomNav() {
   const { profile } = useAuth()
-  const isPreceptor = profile?.role === 'preceptor' || profile?.role === 'admin'
+  // A preceptor still waiting on an administrator has no schedule to
+  // manage and no requests to answer, so they get the abhyasi's tabs.
+  const canGiveSittings = isApprovedPreceptor(profile)
 
   const items: NavItem[] = [
     { to: '/dashboard', label: 'Home', icon: Home },
     { to: '/find', label: 'Find', icon: Search },
     { to: '/bookings', label: 'My sittings', icon: CalendarCheck },
   ]
-  if (isPreceptor) {
+  if (canGiveSittings) {
     items.push({ to: '/sittings', label: 'Incoming', icon: CalendarClock })
     items.push({ to: '/availability', label: 'Schedule', icon: UserRound })
   } else {

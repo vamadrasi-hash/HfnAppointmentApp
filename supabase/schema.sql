@@ -16,6 +16,7 @@ drop table if exists zones cascade;
 drop type if exists user_role cascade;
 drop type if exists booking_status cascade;
 drop type if exists sitting_place cascade;
+drop type if exists preceptor_status cascade;
 
 create extension if not exists "uuid-ossp";
 
@@ -38,6 +39,9 @@ create type booking_status as enum (
 );
 -- Where a sitting happens: a center's heartspot, or the preceptor's home.
 create type sitting_place as enum ('heartspot', 'home');
+-- Anyone may sign up as a preceptor, but an administrator decides whether
+-- the claim is real before that account can publish availability.
+create type preceptor_status as enum ('pending', 'approved', 'rejected');
 
 -- =====================================================================
 -- MASTER DATA: Zone -> Center (grouped by city)
@@ -113,6 +117,12 @@ create table profiles (
   email           text,
   phone           text,
   role            user_role not null default 'abhyasi',
+  -- A preceptor account waits for an administrator: 'pending' until one
+  -- approves it, and null for anyone who is not a preceptor. An abhyasi
+  -- signs in and starts requesting sittings straight away.
+  preceptor_status preceptor_status,
+  approved_by     uuid references profiles(id) on delete set null,
+  approved_at     timestamptz,
   -- where this person belongs (and, for preceptors, where they give sittings)
   zone_id         uuid references zones(id) on delete set null,
   center_id       uuid references centers(id) on delete set null,
@@ -127,6 +137,9 @@ create table profiles (
 
 create index idx_profiles_center on profiles(center_id);
 create index idx_profiles_role on profiles(role);
+create index idx_profiles_preceptor_status
+  on profiles(preceptor_status)
+  where preceptor_status is not null;
 
 -- =====================================================================
 -- HOME PLACES — where a person lives. One row per profile.
@@ -305,10 +318,18 @@ returns trigger as $$
 declare
   slot_preceptor uuid;
   precep_auto    boolean;
+  precep_status  preceptor_status;
 begin
   select preceptor_id into slot_preceptor from availability_slots where id = new.slot_id;
   new.preceptor_id := slot_preceptor;
   if new.requested_at is null then new.requested_at := now(); end if;
+
+  -- Search already hides an unapproved preceptor, and they cannot publish
+  -- a slot; this catches a slot published before an approval was withdrawn.
+  select preceptor_status into precep_status from profiles where id = slot_preceptor;
+  if precep_status is distinct from 'approved' then
+    raise exception 'This preceptor is not approved to give sittings yet.';
+  end if;
 
   if new.status = 'requested' then
     select auto_confirm into precep_auto from profiles where id = slot_preceptor;
@@ -420,28 +441,56 @@ $$;
 -- ---- Roles are an administrator's decision -------------------------
 -- "update own profile" below lets you edit your own row, and `role` is a
 -- column on that row — so without this guard any signed-in person could
--- call the API directly and make themselves an admin. Attempts are
--- ignored rather than rejected, because the sign-up screen sends `role`
--- as part of its upsert and a hard error there would block a real save.
+-- call the API directly and make themselves an admin, or approve their own
+-- preceptor account. Attempts are ignored rather than rejected, because the
+-- sign-up screen sends `role` as part of its upsert and a hard error there
+-- would block a real save.
 create or replace function guard_profile_role()
 returns trigger
 language plpgsql
 security definer
 set search_path = public, pg_temp
 as $$
+declare
+  -- The service role and scheduled jobs have no auth.uid(); both are trusted.
+  privileged boolean := (auth.uid() is null or is_admin());
 begin
-  -- auth.uid() is null for the service role and scheduled jobs — trusted.
-  if auth.uid() is null or is_admin() then
-    return new;
+  if not privileged then
+    if tg_op = 'INSERT' then
+      -- Signing up, you may only ever be an abhyasi or a preceptor...
+      if new.role not in ('abhyasi', 'preceptor') then
+        new.role := 'abhyasi';
+      end if;
+      -- ...and never arrive pre-approved; the block below decides.
+      new.preceptor_status := null;
+      new.approved_by := null;
+      new.approved_at := null;
+    else
+      new.role := old.role;
+      new.preceptor_status := old.preceptor_status;
+      new.approved_by := old.approved_by;
+      new.approved_at := old.approved_at;
+    end if;
   end if;
 
-  if tg_op = 'INSERT' then
-    -- Signing up, you may only ever be an abhyasi or a preceptor.
-    if new.role not in ('abhyasi', 'preceptor') then
-      new.role := 'abhyasi';
+  -- Keep the approval in step with the role, whoever is writing.
+  if new.role = 'preceptor' then
+    -- A new preceptor waits; an existing one keeps whatever they have.
+    if new.preceptor_status is null then
+      new.preceptor_status := 'pending';
     end if;
+  elsif new.role = 'admin' then
+    new.preceptor_status := 'approved';
   else
-    new.role := old.role;
+    -- An abhyasi (or coordinator) has nothing to approve.
+    new.preceptor_status := null;
+  end if;
+
+  if tg_op = 'UPDATE'
+     and new.preceptor_status is distinct from old.preceptor_status
+     and new.preceptor_status = 'approved' then
+    new.approved_by := auth.uid();
+    new.approved_at := now();
   end if;
 
   return new;
@@ -481,11 +530,27 @@ create policy "update own profile" on profiles
 create policy "slots readable" on availability_slots
   for select to authenticated using (true);
 
--- A preceptor manages only their own slots; admins can manage any.
-create policy "preceptor manage own slots" on availability_slots
+-- Only an approved preceptor may publish availability. Reading and
+-- removing your own slots stays open, so a preceptor whose approval is
+-- withdrawn can still tidy up.
+create or replace function is_approved_preceptor()
+returns boolean
+language sql
+security definer
+stable
+set search_path = public, pg_temp
+as $$
+  select exists (
+    select 1 from profiles
+    where id = auth.uid()
+      and (role = 'admin' or (role = 'preceptor' and preceptor_status = 'approved'))
+  );
+$$;
+
+create policy "approved preceptor manage own slots" on availability_slots
   for all to authenticated
   using (preceptor_id = auth.uid() or is_admin())
-  with check (preceptor_id = auth.uid() or is_admin());
+  with check ((preceptor_id = auth.uid() and is_approved_preceptor()) or is_admin());
 
 -- ---- Home places (where a person lives) -----------------------------
 -- Yours to edit, nobody else's (bar an admin).
@@ -624,6 +689,7 @@ as $$
     group by slot_id
   ) b on b.slot_id = s.id
   where s.is_active = true
+    and p.preceptor_status = 'approved'
     and s.day_of_week = extract(dow from target_date)::int;
 $$;
 
@@ -652,11 +718,13 @@ revoke execute on function public.on_booking_status_change() from public, anon, 
 revoke execute on function public.guard_profile_role()       from public, anon, authenticated;
 revoke execute on function public.normalize_slot_place()     from public, anon, authenticated;
 
--- is_admin() is evaluated inside the RLS policies as the calling user, so
--- signed-in users must keep EXECUTE. Signed-out ones never reach a policy
--- that uses it.
+-- is_admin() and is_approved_preceptor() are evaluated inside the RLS
+-- policies as the calling user, so signed-in users must keep EXECUTE.
+-- Signed-out ones never reach a policy that uses them.
 revoke execute on function public.is_admin() from public, anon;
 grant  execute on function public.is_admin() to authenticated;
+revoke execute on function public.is_approved_preceptor() from public, anon;
+grant  execute on function public.is_approved_preceptor() to authenticated;
 
 -- The slot search is for signed-in users only.
 revoke execute on function public.find_available_slots(date) from public, anon;

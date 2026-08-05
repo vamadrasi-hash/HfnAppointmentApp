@@ -13,6 +13,7 @@ import Availability from './pages/Availability'
 import MySittings from './pages/MySittings'
 import Profile from './pages/Profile'
 import AdminMasterData from './pages/AdminMasterData'
+import AdminPreceptors from './pages/AdminPreceptors'
 
 // Onboarding sits between sign-in and the app: it needs a session but
 // must run before a profile exists.
@@ -48,6 +49,14 @@ export default function App() {
           element={
             <ProtectedRoute adminOnly>
               <AdminMasterData />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/preceptors"
+          element={
+            <ProtectedRoute adminOnly>
+              <AdminPreceptors />
             </ProtectedRoute>
           }
         />

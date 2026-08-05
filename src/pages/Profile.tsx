@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   Check,
+  CheckCircle2,
+  Clock3,
   LogOut,
   CalendarCog,
   ShieldCheck,
@@ -10,11 +12,21 @@ import {
   Lock,
   MessageCircle,
   Copy,
+  UserCheck,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { upsertProfile, saveHomePlace } from '../lib/api'
 import { buildProfileShareText, whatsappShareUrl } from '../lib/share'
+import {
+  isAdmin as isAdminRole,
+  isApprovedPreceptor,
+  isPendingPreceptor,
+  isPreceptorRole,
+  isRejectedPreceptor,
+  roleLabel,
+} from '../lib/roles'
 import { Avatar, Badge, Button, Card, Field, Input } from '../components/ui'
+import { Modal } from '../components/Modal'
 import { ZoneCenterPicker, type ZoneCenterValue } from '../components/ZoneCenterPicker'
 import { LocationPicker, toPlaceValue, type PlaceValue } from '../components/LocationPicker'
 
@@ -41,11 +53,19 @@ export default function Profile() {
   const [copied, setCopied] = useState(false)
 
   const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  // Every save ends in a word: a confirmation people have to dismiss, so a
+  // change is never left in doubt.
+  const [savedOpen, setSavedOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const isPreceptor = profile?.role === 'preceptor' || profile?.role === 'admin'
-  const isAdmin = profile?.role === 'admin'
+  // Registered as a preceptor — which is what decides whether this screen
+  // shows the things preceptors need, like an address abhyasis will be
+  // given. Actually *giving* sittings needs an administrator's approval.
+  const isPreceptor = isPreceptorRole(profile)
+  const canGiveSittings = isApprovedPreceptor(profile)
+  const awaitingApproval = isPendingPreceptor(profile)
+  const approvalRefused = isRejectedPreceptor(profile)
+  const isAdmin = isAdminRole(profile)
 
   async function save() {
     if (!user) return
@@ -55,7 +75,6 @@ export default function Profile() {
       return
     }
     setSaving(true)
-    setSaved(false)
     try {
       // The home address is a table of its own, so it saves separately.
       await saveHomePlace(user.id, {
@@ -71,11 +90,10 @@ export default function Profile() {
         zone_id: place.zoneId || null,
         center_id: place.centerId || null,
         city: place.city,
-        ...(isPreceptor ? { auto_confirm: autoConfirm } : {}),
+        ...(canGiveSittings ? { auto_confirm: autoConfirm } : {}),
       })
       setProfile(updated)
-      setSaved(true)
-      window.setTimeout(() => setSaved(false), 3000)
+      setSavedOpen(true)
     } catch (e: any) {
       setError(e.message ?? 'Could not save your profile.')
     } finally {
@@ -112,13 +130,6 @@ export default function Profile() {
     navigate('/login', { replace: true })
   }
 
-  const roleLabel =
-    profile?.role === 'admin'
-      ? 'Administrator'
-      : profile?.role === 'preceptor'
-        ? 'Preceptor'
-        : 'Abhyasi'
-
   return (
     <div className="space-y-5">
       <h1 className="font-serif text-2xl text-ink-900">Profile</h1>
@@ -134,47 +145,76 @@ export default function Profile() {
             </p>
           )}
           <div className="mt-1.5">
-            <Badge tone={isPreceptor ? 'gold' : 'brand'}>{roleLabel}</Badge>
+            <Badge tone={awaitingApproval || approvalRefused ? 'amber' : isPreceptor ? 'gold' : 'brand'}>
+              {roleLabel(profile)}
+            </Badge>
           </div>
         </div>
       </Card>
 
-      {/* Share my details on WhatsApp */}
-      <Card className="space-y-3">
-        <div>
-          <p className="text-sm font-semibold text-ink-700">Share my details</p>
-          <p className="mt-0.5 text-xs text-ink-500">
-            Sends your name, phone, address and map link to any WhatsApp chat.
+      {/* Waiting on an administrator */}
+      {awaitingApproval && (
+        <Card className="border-amber-200 bg-amber-50/60">
+          <p className="inline-flex items-center gap-2 font-semibold text-amber-800">
+            <Clock3 className="h-4 w-4" /> Your preceptor account is awaiting approval
           </p>
-        </div>
-
-        <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-brand-100 bg-brand-50/50 px-3.5 py-2.5 font-sans text-xs leading-relaxed text-ink-600">
-          {shareText}
-        </pre>
-
-        <div className="flex gap-2">
-          <Button
-            onClick={shareOnWhatsApp}
-            className="flex-1 border-transparent bg-[#25D366] text-white shadow-soft hover:bg-[#1da851] active:bg-[#128C7E]"
-          >
-            <MessageCircle className="h-4 w-4" /> Share on WhatsApp
-          </Button>
-          <Button variant="secondary" onClick={copyShareText}>
-            {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-            {copied ? 'Copied' : 'Copy'}
-          </Button>
-        </div>
-
-        {!home.address.trim() && !home.latitude && !home.map_url && (
-          <p className="text-xs text-amber-700">
-            Add your home address and Google location below to include them.
+          <p className="mt-1 text-sm text-amber-800">
+            An administrator has to confirm that you serve as a preceptor before you can publish
+            your schedule and receive sitting requests. Until then you can use the app as usual and
+            request sittings with others.
           </p>
-        )}
-      </Card>
+        </Card>
+      )}
+
+      {approvalRefused && (
+        <Card className="border-amber-200 bg-amber-50/60">
+          <p className="font-semibold text-amber-800">Your preceptor account was not approved</p>
+          <p className="mt-1 text-sm text-amber-800">
+            You can still request sittings with preceptors. If you believe this is a mistake, speak
+            to your center's coordinator.
+          </p>
+        </Card>
+      )}
+
+      {/* Share my details on WhatsApp — a preceptor's details are meant to
+          reach the abhyasis coming to them; an abhyasi's are their own. */}
+      {isPreceptor && (
+        <Card className="space-y-3">
+          <div>
+            <p className="text-sm font-semibold text-ink-700">Share my details</p>
+            <p className="mt-0.5 text-xs text-ink-500">
+              Sends your name, phone, address and map link to any WhatsApp chat.
+            </p>
+          </div>
+
+          <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-brand-100 bg-brand-50/50 px-3.5 py-2.5 font-sans text-xs leading-relaxed text-ink-600">
+            {shareText}
+          </pre>
+
+          <div className="flex gap-2">
+            <Button
+              onClick={shareOnWhatsApp}
+              className="flex-1 border-transparent bg-[#25D366] text-white shadow-soft hover:bg-[#1da851] active:bg-[#128C7E]"
+            >
+              <MessageCircle className="h-4 w-4" /> Share on WhatsApp
+            </Button>
+            <Button variant="secondary" onClick={copyShareText}>
+              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              {copied ? 'Copied' : 'Copy'}
+            </Button>
+          </div>
+
+          {!home.address.trim() && !home.latitude && !home.map_url && (
+            <p className="text-xs text-amber-700">
+              Add your home address and Google location below to include them.
+            </p>
+          )}
+        </Card>
+      )}
 
       {/* Quick links */}
       <div className="space-y-2">
-        {isPreceptor && (
+        {canGiveSittings && (
           <Link to="/availability">
             <Card className="flex items-center gap-3 py-3">
               <CalendarCog className="h-5 w-5 text-brand-600" />
@@ -184,18 +224,27 @@ export default function Profile() {
           </Link>
         )}
         {isAdmin && (
-          <Link to="/admin">
-            <Card className="flex items-center gap-3 py-3">
-              <ShieldCheck className="h-5 w-5 text-brand-600" />
-              <span className="flex-1 font-medium text-ink-800">Master data</span>
-              <ChevronRight className="h-4 w-4 text-ink-300" />
-            </Card>
-          </Link>
+          <>
+            <Link to="/admin/preceptors">
+              <Card className="flex items-center gap-3 py-3">
+                <UserCheck className="h-5 w-5 text-brand-600" />
+                <span className="flex-1 font-medium text-ink-800">Preceptor approvals</span>
+                <ChevronRight className="h-4 w-4 text-ink-300" />
+              </Card>
+            </Link>
+            <Link to="/admin">
+              <Card className="flex items-center gap-3 py-3">
+                <ShieldCheck className="h-5 w-5 text-brand-600" />
+                <span className="flex-1 font-medium text-ink-800">Master data</span>
+                <ChevronRight className="h-4 w-4 text-ink-300" />
+              </Card>
+            </Link>
+          </>
         )}
       </div>
 
       {/* Preceptor: auto-confirm preference */}
-      {isPreceptor && (
+      {canGiveSittings && (
         <Card>
           <label className="flex cursor-pointer items-start justify-between gap-3">
             <span>
@@ -254,12 +303,15 @@ export default function Profile() {
           <p className="mt-0.5 mb-3 text-xs text-ink-500">
             {isPreceptor
               ? 'Sorts “near me” by distance from here — and is the address abhyasis are given when you give a sitting at home.'
-              : 'Only used to sort preceptors by distance from you in “near me”.'}
+              : 'Yours alone. Nobody is ever sent here — “near me” uses your phone’s location when you turn it on.'}
           </p>
 
+          {/* An abhyasi never has to be found: no map pin, no Maps link. A
+              preceptor does, so theirs stays. */}
           <LocationPicker
             value={home}
             onChange={setHome}
+            showGoogleLocation={isPreceptor}
             addressLabel="Address"
             addressHint="Optional. A landmark helps people find the door."
             addressPlaceholder="Flat / house, society, road, area"
@@ -282,19 +334,30 @@ export default function Profile() {
         )}
 
         <Button full onClick={save} loading={saving}>
-          {saved ? (
-            <>
-              <Check className="h-4 w-4" /> Saved
-            </>
-          ) : (
-            'Save changes'
-          )}
+          Save changes
         </Button>
       </Card>
 
       <Button variant="danger" full onClick={handleSignOut}>
         <LogOut className="h-4 w-4" /> Sign out
       </Button>
+
+      {/* Save confirmation — shown to everyone, every time */}
+      <Modal
+        open={savedOpen}
+        onClose={() => setSavedOpen(false)}
+        title="Profile saved"
+        footer={
+          <Button full onClick={() => setSavedOpen(false)}>
+            Done
+          </Button>
+        }
+      >
+        <div className="flex items-start gap-3">
+          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+          <p className="text-sm text-ink-600">Your changes have been saved.</p>
+        </div>
+      </Modal>
     </div>
   )
 }
