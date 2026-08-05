@@ -77,6 +77,12 @@ export interface Profile {
   center_id: string | null
   city: string | null
   auto_confirm?: boolean
+  /**
+   * Preceptor option: be asked for times outside the published schedule.
+   * When on, this preceptor is listed in search — and in "near me" — even
+   * on days they hold no slot, and an abhyasi may name a time themselves.
+   */
+  accepts_open_requests?: boolean
   created_at?: string
   updated_at?: string
   /**
@@ -114,12 +120,16 @@ export interface AvailabilitySlot {
 
 export interface Booking {
   id: string
-  slot_id: string
+  /** Null for a request made outside the preceptor's schedule. */
+  slot_id: string | null
   abhyasi_id: string
   preceptor_id: string | null
   booking_date: string // 'YYYY-MM-DD'
   status: BookingStatus
   note: string | null
+  /** Only when there is no slot: the time the abhyasi asked for. */
+  requested_start_time?: string | null
+  requested_end_time?: string | null
   // confirmation workflow
   requested_at?: string | null
   confirmed_at?: string | null
@@ -156,6 +166,8 @@ export interface ResolvedPlace extends PlaceDetails {
 // resolved, as `place`.
 export interface AvailableSlot
   extends Omit<AvailabilitySlot, 'heartspot_id' | 'place_details'> {
+  /** The real date this weekly slot was searched for, 'YYYY-MM-DD'. */
+  date: string
   preceptor: Pick<Profile, 'id' | 'full_name' | 'phone'>
   center: Pick<Center, 'id' | 'name' | 'city' | 'latitude' | 'longitude'> | null
   place: ResolvedPlace
@@ -169,7 +181,58 @@ export interface PreceptorWithSlots {
   distanceKm: number | null
   /** True when the distance came from a home sitting's coarse location. */
   distanceApprox: boolean
+  /** Open times on the day that was searched for. May be empty. */
   slots: AvailableSlot[]
+  /**
+   * This preceptor accepts requests outside their schedule, so they can be
+   * asked for a time even on a day with no slot.
+   */
+  openToRequests: boolean
+  /**
+   * Their soonest open time from today onwards — what a seeker is shown
+   * when the day they picked has nothing, and how the by-area list is
+   * ordered. Null when they have no free time in the window looked at.
+   */
+  nextAvailable: AvailableSlot | null
+}
+
+/** One center's available preceptors, inside an area. */
+export interface CenterGroup {
+  centerId: string | null
+  /** The center's own name, e.g. 'Surat-West-Adajan'. */
+  centerName: string
+  preceptors: PreceptorWithSlots[]
+}
+
+/**
+ * Preceptors grouped by area (the center's city) and then by center —
+ * what a seeker gets when nobody is free nearby on the day they picked.
+ */
+export interface AreaGroup {
+  /** The city, or 'Other centers' for centers with no city recorded. */
+  area: string
+  centers: CenterGroup[]
+  preceptorCount: number
+}
+
+// ---- Notifications ---------------------------------------------------
+
+export type NotificationKind =
+  | 'request'
+  | 'open_request'
+  | 'confirmed'
+  | 'declined'
+  | 'alternate_proposed'
+  | 'cancelled'
+
+export interface AppNotification {
+  id: string
+  booking_id: string | null
+  kind: NotificationKind
+  title: string
+  body: string | null
+  read_at: string | null
+  created_at: string
 }
 
 export interface BookingDetail extends Booking {

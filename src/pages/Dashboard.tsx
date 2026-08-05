@@ -9,11 +9,11 @@ import {
   CalendarCheck,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { getMyBookings } from '../lib/api'
+import { getMyBookings, upsertProfile } from '../lib/api'
 import type { BookingDetail } from '../lib/types'
-import { Badge, Card, SectionTitle } from '../components/ui'
+import { Badge, Card, SectionTitle, Toggle } from '../components/ui'
 import { PlaceLine } from '../components/PlaceLine'
-import { formatTimeRange, prettyDate, isPastDate } from '../lib/utils'
+import { bookingTimes, formatTimeRange, prettyDate, isPastDate } from '../lib/utils'
 
 function greeting(): string {
   const h = new Date().getHours()
@@ -50,12 +50,31 @@ function QuickAction({
 }
 
 export default function Dashboard() {
-  const { user, profile } = useAuth()
+  const { user, profile, setProfile } = useAuth()
   const isPreceptor = profile?.role === 'preceptor' || profile?.role === 'admin'
   const isAdmin = profile?.role === 'admin'
 
   const [next, setNext] = useState<BookingDetail | null>(null)
   const [loaded, setLoaded] = useState(false)
+
+  // The same choice as in the profile, close to hand: it is the one a
+  // preceptor changes with the week rather than once and for all.
+  const openRequests = profile?.accepts_open_requests ?? false
+  const [savingOpen, setSavingOpen] = useState(false)
+  const [openError, setOpenError] = useState<string | null>(null)
+
+  async function setOpenRequests(next: boolean) {
+    if (!user) return
+    setSavingOpen(true)
+    setOpenError(null)
+    try {
+      setProfile(await upsertProfile({ id: user.id, accepts_open_requests: next }))
+    } catch (e: any) {
+      setOpenError(e.message ?? 'Could not save that. Please try again.')
+    } finally {
+      setSavingOpen(false)
+    }
+  }
 
   useEffect(() => {
     if (!user) return
@@ -108,15 +127,34 @@ export default function Dashboard() {
               </div>
               <div className="mt-3 flex items-center gap-2 text-sm text-ink-700">
                 <Badge tone="brand">{prettyDate(next.booking_date)}</Badge>
-                {next.slot && (
-                  <span className="text-ink-500">
-                    {formatTimeRange(next.slot.start_time, next.slot.end_time)}
-                  </span>
-                )}
+                {(() => {
+                  const t = bookingTimes(next)
+                  return t ? (
+                    <span className="text-ink-500">{formatTimeRange(t.start, t.end)}</span>
+                  ) : null
+                })()}
               </div>
             </Card>
           </Link>
         </div>
+      )}
+
+      {/* Open to being asked outside the schedule */}
+      {isPreceptor && (
+        <Card className="space-y-2">
+          <Toggle
+            checked={openRequests}
+            onChange={setOpenRequests}
+            disabled={savingOpen}
+            label="Open to requests outside my schedule"
+            hint={
+              openRequests
+                ? 'Abhyasis can ask you for any time, and you appear in “near me” even on days you hold no slot.'
+                : 'Only the times you publish can be requested.'
+            }
+          />
+          {openError && <p className="text-sm text-red-600">{openError}</p>}
+        </Card>
       )}
 
       {/* Quick actions */}

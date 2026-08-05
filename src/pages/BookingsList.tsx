@@ -8,6 +8,7 @@ import { Badge, Button, Card, EmptyState, PageLoader, SectionTitle } from '../co
 import { Modal } from '../components/Modal'
 import { PlaceLine } from '../components/PlaceLine'
 import {
+  bookingTimes,
   formatTimeRange,
   formatTime,
   prettyDate,
@@ -37,6 +38,8 @@ function BookingRow({
   const showWhereToGo =
     ['requested', 'confirmed', 'reminded', 'alternate_proposed'].includes(b.status) &&
     !isPastDate(b.booking_date)
+  const isOpenRequest = !b.slot_id
+  const times = bookingTimes(b)
 
   return (
     <Card>
@@ -52,12 +55,17 @@ function BookingRow({
 
       <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
         <Badge tone="neutral">{prettyDate(b.booking_date)}</Badge>
-        {b.slot && (
-          <span className="text-ink-600">
-            {formatTimeRange(b.slot.start_time, b.slot.end_time)}
-          </span>
-        )}
+        {times && <span className="text-ink-600">{formatTimeRange(times.start, times.end)}</span>}
       </div>
+
+      {/* A time the preceptor never published: there is no place on file,
+          so they settle that when they answer. */}
+      {isOpenRequest && showWhereToGo && (
+        <p className="mt-2 rounded-lg bg-brand-50/70 px-3 py-2 text-xs text-ink-500">
+          You asked for a time outside {b.preceptor?.full_name ?? 'the preceptor'}’s schedule. They
+          will confirm the time and where to meet.
+        </p>
+      )}
 
       {b.note && <p className="mt-2 text-sm text-ink-500">“{b.note}”</p>}
 

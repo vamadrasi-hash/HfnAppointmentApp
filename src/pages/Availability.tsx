@@ -14,14 +14,26 @@ import {
 } from '../lib/masterData'
 import { MY_HOME_PLACE_NAME, resolvePlace } from '../lib/place'
 import { hasLocation } from '../lib/geo'
-import { Badge, Button, Card, EmptyState, Field, Input, PageLoader, Select } from '../components/ui'
+import { Badge, Button, Card, EmptyState, Field, Input, PageLoader } from '../components/ui'
 import { Combobox, type ComboOption } from '../components/Combobox'
 import { Modal } from '../components/Modal'
 import { PlaceLine } from '../components/PlaceLine'
-import { WEEK_DAYS, dayLabel, formatTimeRange, formatTime, cx } from '../lib/utils'
+import {
+  DEFAULT_SITTING_MINUTES,
+  WEEK_DAYS,
+  addMinutesToTime,
+  dayLabel,
+  durationMinutes,
+  formatTimeRange,
+  formatTime,
+  cx,
+} from '../lib/utils'
 
 interface FormState {
-  day_of_week: number
+  // The same time often repeats across several days, so a new slot is
+  // written once and saved for every day ticked. Editing touches the one
+  // slot that was opened, so then this holds a single day.
+  days: number[]
   start_time: string // 'HH:MM'
   end_time: string
   capacity: number
@@ -35,9 +47,9 @@ interface FormState {
 }
 
 const emptyForm = (centerId: string): FormState => ({
-  day_of_week: 1,
+  days: [1],
   start_time: '07:00',
-  end_time: '08:00',
+  end_time: addMinutesToTime('07:00', DEFAULT_SITTING_MINUTES),
   capacity: 1,
   center_id: centerId,
   place_type: 'heartspot',
@@ -58,6 +70,7 @@ export default function Availability() {
   const [heartspots, setHeartspots] = useState<Heartspot[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
 
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<AvailabilitySlot | null>(null)
@@ -136,7 +149,7 @@ export default function Availability() {
   function openEdit(s: AvailabilitySlot) {
     setEditing(s)
     setForm({
-      day_of_week: s.day_of_week,
+      days: [s.day_of_week],
       start_time: s.start_time.slice(0, 5),
       end_time: s.end_time.slice(0, 5),
       capacity: s.capacity,
@@ -148,6 +161,28 @@ export default function Availability() {
     })
     setFormError(null)
     setOpen(true)
+  }
+
+  // Editing changes the one slot that was opened, so its day is a choice
+  // of one. Adding takes as many days as the same time repeats on.
+  function toggleDay(day: number) {
+    setForm((f) => {
+      if (editing) return { ...f, days: [day] }
+      return {
+        ...f,
+        days: f.days.includes(day) ? f.days.filter((d) => d !== day) : [...f.days, day],
+      }
+    })
+  }
+
+  // A sitting is half an hour, so the end time follows the start instead
+  // of being typed twice. Once someone gives it a different length, that
+  // length is what moves along with the start.
+  function pickStart(start: string) {
+    setForm((f) => {
+      const span = durationMinutes(f.start_time, f.end_time) || DEFAULT_SITTING_MINUTES
+      return { ...f, start_time: start, end_time: addMinutesToTime(start, span) }
+    })
   }
 
   // Changing the center invalidates a heartspot from the old one.
@@ -162,6 +197,10 @@ export default function Availability() {
   async function save() {
     if (!user) return
     setFormError(null)
+    if (form.days.length === 0) {
+      setFormError('Pick at least one day.')
+      return
+    }
     if (form.end_time <= form.start_time) {
       setFormError('End time must be after the start time.')
       return
@@ -185,7 +224,6 @@ export default function Availability() {
 
     const isHome = form.place_type === 'home'
     const payload = {
-      day_of_week: form.day_of_week,
       start_time: withSeconds(form.start_time),
       end_time: withSeconds(form.end_time),
       capacity: form.capacity,
@@ -200,8 +238,39 @@ export default function Availability() {
 
     setSaving(true)
     try {
-      if (editing) await updateSlot(editing.id, payload)
-      else await createSlot({ preceptor_id: user.id, ...payload })
+      if (editing) {
+        await updateSlot(editing.id, { ...payload, day_of_week: form.days[0] })
+      } else {
+        // One slot per day ticked, saved in the order the week reads.
+        const days = [...form.days].sort(
+          (a, b) =>
+            WEEK_DAYS.findIndex((d) => d.value === a) - WEEK_DAYS.findIndex((d) => d.value === b),
+        )
+        const failed: number[] = []
+        for (const day of days) {
+          try {
+            await createSlot({ preceptor_id: user.id, day_of_week: day, ...payload })
+          } catch {
+            failed.push(day)
+          }
+        }
+        // Anything that did save stays saved; only the rest is reported.
+        if (failed.length === days.length) {
+          setFormError('Could not save this slot.')
+          return
+        }
+        if (failed.length > 0) {
+          setError(`Saved, except for ${failed.map(dayLabel).join(', ')}. Please try those again.`)
+        } else {
+          const added = days.length
+          setNotice(
+            added === 1
+              ? `${dayLabel(days[0])} added at ${formatTime(form.start_time)}.`
+              : `${added} slots added at ${formatTime(form.start_time)}.`,
+          )
+          window.setTimeout(() => setNotice(null), 5000)
+        }
+      }
 
       setOpen(false)
       await load()
@@ -261,7 +330,8 @@ export default function Availability() {
         <div>
           <h1 className="font-serif text-2xl text-ink-900">My schedule</h1>
           <p className="mt-1 text-sm text-ink-500">
-            Set the weekly times you can give individual sittings, and where they happen.
+            Set the weekly times you can give individual sittings, and where they happen. A time
+            that repeats can be added for several days at once.
           </p>
         </div>
         <Button onClick={openAdd} className="shrink-0">
@@ -272,6 +342,12 @@ export default function Availability() {
       {error && (
         <p className="rounded-xl border border-red-100 bg-red-50 px-3.5 py-2.5 text-sm text-red-600">
           {error}
+        </p>
+      )}
+
+      {notice && (
+        <p className="rounded-xl border border-emerald-100 bg-emerald-50 px-3.5 py-2.5 text-sm text-emerald-700">
+          {notice}
         </p>
       )}
 
@@ -355,34 +431,56 @@ export default function Availability() {
               Cancel
             </Button>
             <Button onClick={save} loading={saving} className="flex-1">
-              {editing ? 'Save changes' : 'Add slot'}
+              {editing
+                ? 'Save changes'
+                : form.days.length > 1
+                  ? `Add ${form.days.length} slots`
+                  : 'Add slot'}
             </Button>
           </>
         }
       >
         <div className="space-y-3">
-          <Field label="Day of week">
-            <Select
-              value={String(form.day_of_week)}
-              onChange={(e) => setForm({ ...form, day_of_week: Number(e.target.value) })}
-            >
-              {WEEK_DAYS.map((d) => (
-                <option key={d.value} value={d.value}>
-                  {d.label}
-                </option>
-              ))}
-            </Select>
-          </Field>
+          <div>
+            <p className="mb-1.5 text-sm font-medium text-ink-700">
+              {editing ? 'Day' : 'Days'}
+            </p>
+            <div className="grid grid-cols-4 gap-2">
+              {WEEK_DAYS.map((d) => {
+                const on = form.days.includes(d.value)
+                return (
+                  <button
+                    key={d.value}
+                    type="button"
+                    onClick={() => toggleDay(d.value)}
+                    aria-pressed={on}
+                    className={cx(
+                      'rounded-xl border px-2 py-2 text-sm font-medium transition-colors',
+                      on
+                        ? 'border-brand-500 bg-brand-600 text-white shadow-soft'
+                        : 'border-brand-200 bg-white text-ink-600 hover:border-brand-400',
+                    )}
+                  >
+                    {d.short}
+                  </button>
+                )
+              })}
+            </div>
+            <p className="mt-1 text-xs text-ink-400">
+              {editing
+                ? 'Move this slot to a different day.'
+                : 'Tick every day this time repeats on — one slot is added for each.'}
+            </p>
+          </div>
 
           <div className="grid grid-cols-2 gap-3">
             <Field label="Start time">
-              <Input
-                type="time"
-                value={form.start_time}
-                onChange={(e) => setForm({ ...form, start_time: e.target.value })}
-              />
+              <Input type="time" value={form.start_time} onChange={(e) => pickStart(e.target.value)} />
             </Field>
-            <Field label="End time">
+            <Field
+              label="End time"
+              hint={`Follows the start by ${DEFAULT_SITTING_MINUTES} minutes — change it if yours run longer.`}
+            >
               <Input
                 type="time"
                 value={form.end_time}

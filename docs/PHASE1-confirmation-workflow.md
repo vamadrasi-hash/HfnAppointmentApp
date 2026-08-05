@@ -32,6 +32,11 @@ On the **Profile** screen a preceptor now has an **"Auto-confirm requests"**
 switch. Turn it on and requests are confirmed instantly (the old behaviour) —
 useful for preceptors who don't want to approve each one by hand.
 
+> Since migration `008`, this applies to the times a preceptor has published
+> and to those only. A request for a time outside the schedule always waits
+> for the preceptor to accept it. See the README section
+> "Being asked for a time outside the schedule".
+
 ---
 
 ## The one thing you must do — update the database

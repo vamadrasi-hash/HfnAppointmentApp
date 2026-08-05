@@ -5,6 +5,7 @@
 -- =====================================================================
 
 -- ---- Clean slate (so you can re-run during setup) -------------------
+drop table if exists notifications cascade;
 drop table if exists bookings cascade;
 drop table if exists home_places cascade;
 drop table if exists availability_slots cascade;
@@ -120,6 +121,10 @@ create table profiles (
   city            text,                        -- copied from the chosen center
   -- Preceptor option: confirm incoming requests automatically (low-friction booking).
   auto_confirm    boolean not null default false,
+  -- Preceptor option: be asked for times outside the published schedule.
+  -- When on, this preceptor is listed in search even on days they have no
+  -- slot, and an abhyasi may name a time themselves.
+  accepts_open_requests boolean not null default false,
   created_at      timestamptz default now(),
   updated_at      timestamptz default now()
   -- Where this person lives is NOT here: see `home_places` below.
@@ -218,16 +223,22 @@ create trigger trg_normalize_slot_place
   for each row execute function normalize_slot_place();
 
 -- =====================================================================
--- BOOKINGS — an abhyasi reserves a place in a slot for one real date
+-- BOOKINGS — an abhyasi reserves a place in a slot for one real date,
+-- or — where the preceptor allows it — asks for a time of their own.
 -- =====================================================================
 create table bookings (
   id                 uuid primary key default uuid_generate_v4(),
-  slot_id            uuid not null references availability_slots(id) on delete cascade,
+  -- Null for a request outside the preceptor's schedule; then the asked-for
+  -- time is on the booking itself, below.
+  slot_id            uuid references availability_slots(id) on delete cascade,
   abhyasi_id         uuid not null references profiles(id) on delete cascade,
   preceptor_id       uuid references profiles(id) on delete cascade,  -- filled from the slot
   booking_date       date not null,
   status             booking_status not null default 'requested',
   note               text,
+  -- Only for a booking with no slot: the time the abhyasi asked for.
+  requested_start_time time,
+  requested_end_time   time,
   -- confirmation workflow bookkeeping
   requested_at       timestamptz default now(),
   confirmed_at       timestamptz,
@@ -240,7 +251,12 @@ create table bookings (
   alternate_start_time time,
   alternate_end_time   time,
   channel_used       text,                        -- 'whatsapp' | 'email' (Phase 3/4)
-  created_at         timestamptz default now()
+  created_at         timestamptz default now(),
+  -- Either it belongs to a slot, or it names a preceptor and a time.
+  constraint chk_booking_target check (
+    slot_id is not null
+    or (preceptor_id is not null and requested_start_time is not null)
+  )
 );
 
 create index idx_bookings_slot_date on bookings(slot_id, booking_date);
@@ -252,6 +268,12 @@ create index idx_bookings_preceptor on bookings(preceptor_id);
 create unique index uniq_live_booking
   on bookings (slot_id, booking_date, abhyasi_id)
   where status not in ('cancelled', 'declined', 'expired', 'no_show');
+
+-- The same rule for the bookings that have no slot to hang it off.
+create unique index uniq_live_open_request
+  on bookings (preceptor_id, booking_date, requested_start_time, abhyasi_id)
+  where slot_id is null
+    and status not in ('cancelled', 'declined', 'expired', 'no_show');
 
 -- =====================================================================
 -- CAPACITY GUARD — refuse a booking that would overfill a slot.
@@ -270,6 +292,10 @@ declare
   slot_capacity int;
   live_count int;
 begin
+  if new.slot_id is null then
+    return new;  -- nothing published, nothing to fill up
+  end if;
+
   if new.status in ('cancelled', 'declined', 'expired', 'no_show') then
     return new;
   end if;
@@ -297,21 +323,50 @@ create trigger trg_check_capacity
   for each row execute function check_slot_capacity();
 
 -- =====================================================================
--- BOOKING DEFAULTS — on insert, stamp the preceptor and honour
--- a preceptor's "auto_confirm" preference.
+-- BOOKING DEFAULTS — on insert, stamp the preceptor, vet a request made
+-- outside the schedule, and honour a preceptor's "auto_confirm" choice.
 -- =====================================================================
 create or replace function set_booking_defaults()
 returns trigger as $$
 declare
   slot_preceptor uuid;
   precep_auto    boolean;
+  precep_open    boolean;
 begin
-  select preceptor_id into slot_preceptor from availability_slots where id = new.slot_id;
-  new.preceptor_id := slot_preceptor;
+  if new.slot_id is not null then
+    select preceptor_id into slot_preceptor from availability_slots where id = new.slot_id;
+    if slot_preceptor is null then
+      raise exception 'That time slot no longer exists.';
+    end if;
+    new.preceptor_id := slot_preceptor;
+    -- The slot already says when it is; these two are for the other kind.
+    new.requested_start_time := null;
+    new.requested_end_time := null;
+  else
+    -- An out-of-schedule request. The preceptor has to have opted in, and
+    -- the abhyasi has to say when.
+    if new.preceptor_id is null then
+      raise exception 'Say which preceptor this request is for.';
+    end if;
+    select accepts_open_requests into precep_open
+    from profiles where id = new.preceptor_id;
+    if not coalesce(precep_open, false) then
+      raise exception 'This preceptor only accepts sittings from their published schedule.';
+    end if;
+    if new.requested_start_time is null then
+      raise exception 'Say what time you are asking for.';
+    end if;
+    if new.requested_end_time is null then
+      new.requested_end_time := new.requested_start_time + interval '30 minutes';
+    end if;
+  end if;
+
   if new.requested_at is null then new.requested_at := now(); end if;
 
-  if new.status = 'requested' then
-    select auto_confirm into precep_auto from profiles where id = slot_preceptor;
+  -- Auto-confirm is a promise about times the preceptor published, so it
+  -- applies to slot bookings only.
+  if new.status = 'requested' and new.slot_id is not null then
+    select auto_confirm into precep_auto from profiles where id = new.preceptor_id;
     if coalesce(precep_auto, false) then
       new.status := 'confirmed';
       new.confirmed_at := now();
@@ -392,6 +447,126 @@ create trigger trg_booking_status_change
   for each row execute function on_booking_status_change();
 
 -- =====================================================================
+-- NOTIFICATIONS — one row per thing a person should hear about.
+--
+-- Written only by the trigger below (which runs as this table's owner and
+-- so passes RLS); nobody gets an insert policy, so no one can post to
+-- anyone else's inbox.
+-- =====================================================================
+create table notifications (
+  id          uuid primary key default uuid_generate_v4(),
+  profile_id  uuid not null references profiles(id) on delete cascade,
+  booking_id  uuid references bookings(id) on delete cascade,
+  -- 'request' | 'open_request' | 'confirmed' | 'declined'
+  -- | 'alternate_proposed' | 'cancelled'
+  kind        text not null,
+  title       text not null,
+  body        text,
+  read_at     timestamptz,
+  created_at  timestamptz default now()
+);
+
+create index idx_notifications_profile on notifications (profile_id, created_at desc);
+create index idx_notifications_unread  on notifications (profile_id) where read_at is null;
+
+-- The preceptor hears about every request; the abhyasi hears about every
+-- decision on theirs.
+create or replace function notify_on_booking()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  abhy_name   text;
+  precep_name text;
+  start_at    time;
+  when_ts     timestamp;
+  when_text   text;
+  is_open     boolean := (new.slot_id is null);
+begin
+  select full_name into abhy_name   from profiles where id = new.abhyasi_id;
+  select full_name into precep_name from profiles where id = new.preceptor_id;
+
+  if new.slot_id is not null then
+    select start_time into start_at from availability_slots where id = new.slot_id;
+  else
+    start_at := new.requested_start_time;
+  end if;
+
+  when_ts   := new.booking_date + coalesce(start_at, time '00:00');
+  when_text := to_char(when_ts, 'Dy DD Mon')
+               || case when start_at is null then '' else to_char(when_ts, ', HH12:MI AM') end;
+
+  if tg_op = 'INSERT' then
+    insert into notifications (profile_id, booking_id, kind, title, body)
+    values (
+      new.preceptor_id,
+      new.id,
+      case when is_open then 'open_request' else 'request' end,
+      coalesce(abhy_name, 'Someone') || ' requested a sitting',
+      when_text || case when is_open then ' · outside your schedule' else '' end
+    );
+
+    -- Auto-confirm means the abhyasi never waits, so tell them at once.
+    if new.status = 'confirmed' then
+      insert into notifications (profile_id, booking_id, kind, title, body)
+      values (new.abhyasi_id, new.id, 'confirmed',
+              'Your sitting is confirmed',
+              when_text || ' · with ' || coalesce(precep_name, 'your preceptor'));
+    end if;
+
+    return new;
+  end if;
+
+  -- An update: only a change of status is worth an interruption.
+  if new.status is not distinct from old.status then
+    return new;
+  end if;
+
+  if new.status = 'confirmed' then
+    insert into notifications (profile_id, booking_id, kind, title, body)
+    values (new.abhyasi_id, new.id, 'confirmed',
+            'Your sitting is confirmed',
+            when_text || ' · with ' || coalesce(precep_name, 'your preceptor'));
+
+  elsif new.status = 'declined' then
+    insert into notifications (profile_id, booking_id, kind, title, body)
+    values (new.abhyasi_id, new.id, 'declined',
+            'Your request was declined',
+            coalesce(new.decline_reason, when_text));
+
+  elsif new.status = 'alternate_proposed' then
+    insert into notifications (profile_id, booking_id, kind, title, body)
+    values (new.abhyasi_id, new.id, 'alternate_proposed',
+            coalesce(precep_name, 'Your preceptor') || ' proposed another time',
+            to_char(new.alternate_date + coalesce(new.alternate_start_time, time '00:00'),
+                    'Dy DD Mon, HH12:MI AM'));
+
+  elsif new.status = 'cancelled' then
+    -- Tell whoever did not do the cancelling.
+    if new.decided_by is not null and new.decided_by = new.abhyasi_id then
+      insert into notifications (profile_id, booking_id, kind, title, body)
+      values (new.preceptor_id, new.id, 'cancelled',
+              coalesce(abhy_name, 'An abhyasi') || ' cancelled a sitting',
+              when_text);
+    else
+      insert into notifications (profile_id, booking_id, kind, title, body)
+      values (new.abhyasi_id, new.id, 'cancelled',
+              'Your sitting was cancelled',
+              coalesce(new.cancel_reason, when_text));
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_notify_on_booking
+  after insert or update of status on bookings
+  for each row execute function notify_on_booking();
+
+-- =====================================================================
 -- ROW LEVEL SECURITY
 -- =====================================================================
 alter table zones               enable row level security;
@@ -402,6 +577,7 @@ alter table profiles            enable row level security;
 alter table availability_slots  enable row level security;
 alter table home_places         enable row level security;
 alter table bookings            enable row level security;
+alter table notifications       enable row level security;
 
 -- Helper: is the current user an admin? (security definer bypasses RLS,
 -- which avoids infinite recursion when checking the profiles table.)
@@ -517,6 +693,9 @@ create policy "home place readable once confirmed" on home_places
 create policy "bookings readable to involved" on bookings
   for select to authenticated using (
     abhyasi_id = auth.uid()
+    -- Named directly, because a request made outside the schedule has no
+    -- slot to find the preceptor through.
+    or preceptor_id = auth.uid()
     or is_admin()
     or exists (
       select 1 from availability_slots s
@@ -532,6 +711,7 @@ create policy "insert own booking" on bookings
 create policy "update involved booking" on bookings
   for update to authenticated using (
     abhyasi_id = auth.uid()
+    or preceptor_id = auth.uid()
     or is_admin()
     or exists (
       select 1 from availability_slots s
@@ -542,6 +722,20 @@ create policy "update involved booking" on bookings
 -- The booker or an admin may delete a booking.
 create policy "delete own booking" on bookings
   for delete to authenticated using (abhyasi_id = auth.uid() or is_admin());
+
+-- ---- Notifications --------------------------------------------------
+-- Your own inbox, and nobody else's. There is no insert policy on
+-- purpose: only the trigger writes rows.
+create policy "own notifications readable" on notifications
+  for select to authenticated using (profile_id = auth.uid());
+
+-- Marking one read is the only edit a person makes to their own inbox.
+create policy "own notifications updatable" on notifications
+  for update to authenticated
+  using (profile_id = auth.uid()) with check (profile_id = auth.uid());
+
+create policy "own notifications deletable" on notifications
+  for delete to authenticated using (profile_id = auth.uid());
 
 -- =====================================================================
 -- DONE. Next: run seed.sql to load sample master data, then sign up,
@@ -630,6 +824,131 @@ $$;
 grant execute on function find_available_slots(date) to authenticated;
 
 -- =====================================================================
+-- RPC: find_available_slots_range(start_date, days)
+-- The same search over a span of dates instead of one. Finding the *next*
+-- free time, or everyone free anywhere near here, means asking the same
+-- question of the next fortnight — one round trip, not fourteen.
+-- =====================================================================
+create or replace function find_available_slots_range(start_date date, days int default 14)
+returns table (
+  slot_date          date,
+  slot_id            uuid,
+  preceptor_id       uuid,
+  preceptor_name     text,
+  preceptor_phone    text,
+  preceptor_area_id  uuid,
+  center_id          uuid,
+  center_name        text,
+  center_city        text,
+  center_zone_id     uuid,
+  center_lat         double precision,
+  center_lng         double precision,
+  day_of_week        int,
+  start_time         time,
+  end_time           time,
+  capacity           int,
+  note               text,
+  booked_count       bigint,
+  place_type         text,
+  heartspot_id       uuid,
+  heartspot_name     text,
+  place_address      text,
+  place_lat          double precision,
+  place_lng          double precision,
+  place_map_url      text
+)
+language sql
+security definer
+stable
+set search_path = public, pg_temp
+as $$
+  with span as (
+    select d::date as on_date
+    from generate_series(
+      start_date,
+      start_date + (least(greatest(coalesce(days, 14), 1), 60) - 1),
+      interval '1 day'
+    ) d
+  )
+  select
+    span.on_date,
+    s.id, p.id, p.full_name, p.phone, p.area_id,
+    c.id, c.name, c.city, c.zone_id, c.latitude, c.longitude,
+    s.day_of_week, s.start_time, s.end_time, s.capacity, s.note,
+    coalesce(b.cnt, 0) as booked_count,
+    s.place_type::text,
+    h.id, h.name,
+    case when s.place_type = 'home' then null
+         else coalesce(h.address, c.address) end,
+    case when s.place_type = 'home'
+           then round(hp.latitude::numeric, 2)::double precision
+         else coalesce(h.latitude, c.latitude) end,
+    case when s.place_type = 'home'
+           then round(hp.longitude::numeric, 2)::double precision
+         else coalesce(h.longitude, c.longitude) end,
+    case when s.place_type = 'home' then null
+         else coalesce(h.map_url, c.map_url) end
+  from span
+  join availability_slots s
+    on s.is_active = true
+   and s.day_of_week = extract(dow from span.on_date)::int
+  join profiles p on p.id = s.preceptor_id
+  left join centers c on c.id = s.center_id
+  left join heartspots h on h.id = s.heartspot_id
+  left join home_places hp on hp.profile_id = s.preceptor_id
+  left join lateral (
+    select count(*) as cnt
+    from bookings bk
+    where bk.slot_id = s.id
+      and bk.booking_date = span.on_date
+      and bk.status not in ('cancelled', 'declined', 'expired', 'no_show')
+  ) b on true
+  order by span.on_date, s.start_time;
+$$;
+
+grant execute on function find_available_slots_range(date, int) to authenticated;
+
+-- =====================================================================
+-- RPC: find_open_request_preceptors()
+-- Preceptors who can be asked for a time they never published. They have
+-- no slot to be found through, so search would never see them. Their
+-- center is public master data; their home is not, so it comes back
+-- rounded to about a kilometre — only ever enough to sort by distance.
+-- =====================================================================
+create or replace function find_open_request_preceptors()
+returns table (
+  preceptor_id    uuid,
+  preceptor_name  text,
+  preceptor_phone text,
+  center_id       uuid,
+  center_name     text,
+  center_city     text,
+  center_zone_id  uuid,
+  center_lat      double precision,
+  center_lng      double precision,
+  home_lat        double precision,
+  home_lng        double precision
+)
+language sql
+security definer
+stable
+set search_path = public, pg_temp
+as $$
+  select
+    p.id, p.full_name, p.phone,
+    c.id, c.name, c.city, c.zone_id, c.latitude, c.longitude,
+    round(hp.latitude::numeric, 2)::double precision,
+    round(hp.longitude::numeric, 2)::double precision
+  from profiles p
+  left join centers c on c.id = p.center_id
+  left join home_places hp on hp.profile_id = p.id
+  where p.role in ('preceptor', 'admin')
+    and coalesce(p.accepts_open_requests, false) = true;
+$$;
+
+grant execute on function find_open_request_preceptors() to authenticated;
+
+-- =====================================================================
 -- HARDENING — keep the elevated-privilege functions honest.
 -- (Same as migrations/003_security_hardening.sql, for a fresh install.)
 -- =====================================================================
@@ -651,6 +970,7 @@ revoke execute on function public.set_booking_defaults()     from public, anon, 
 revoke execute on function public.on_booking_status_change() from public, anon, authenticated;
 revoke execute on function public.guard_profile_role()       from public, anon, authenticated;
 revoke execute on function public.normalize_slot_place()     from public, anon, authenticated;
+revoke execute on function public.notify_on_booking()        from public, anon, authenticated;
 
 -- is_admin() is evaluated inside the RLS policies as the calling user, so
 -- signed-in users must keep EXECUTE. Signed-out ones never reach a policy
@@ -658,8 +978,10 @@ revoke execute on function public.normalize_slot_place()     from public, anon, 
 revoke execute on function public.is_admin() from public, anon;
 grant  execute on function public.is_admin() to authenticated;
 
--- The slot search is for signed-in users only.
+-- The slot searches are for signed-in users only.
 revoke execute on function public.find_available_slots(date) from public, anon;
+revoke execute on function public.find_available_slots_range(date, int) from public, anon;
+revoke execute on function public.find_open_request_preceptors() from public, anon;
 
 -- One more setting lives outside the database: turn on **leaked password
 -- protection** in the Supabase Dashboard under Authentication → Sign In /
