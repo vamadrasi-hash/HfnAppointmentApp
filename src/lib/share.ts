@@ -48,7 +48,22 @@ export function buildProfileShareText(p: ShareableProfile): string {
   return lines.join('\n')
 }
 
-/** The wa.me link that opens WhatsApp with this message ready to send. */
+function onAPhone(): boolean {
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+}
+
+/**
+ * A link that opens WhatsApp with this message ready to send.
+ *
+ * On a phone wa.me opens the app itself. On a desktop it would instead hand
+ * the text to the installed app through an OS-level URL, and that hand-off
+ * drops every character outside the basic plane — 🙏 📞 🏠 📍 each arrive as
+ * one "�". WhatsApp Web keeps them, because the decoding stays in the
+ * browser, so that is where desktop goes.
+ */
 export function whatsappShareUrl(text: string): string {
-  return `https://wa.me/?text=${encodeURIComponent(text)}`
+  const encoded = encodeURIComponent(text)
+  return onAPhone()
+    ? `https://wa.me/?text=${encoded}`
+    : `https://web.whatsapp.com/send?text=${encoded}`
 }
