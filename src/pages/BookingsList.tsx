@@ -258,7 +258,7 @@ export default function BookingsList() {
                     b={b}
                     busy={busyId === b.id}
                     onCancel={openCancel}
-                    onAccept={(x) => run(x.id, () => acceptAlternate(x.id, x.alternate_date!))}
+                    onAccept={(x) => run(x.id, () => acceptAlternate(x))}
                     onReject={(x) => run(x.id, () => rejectAlternate(x.id))}
                   />
                 ))}

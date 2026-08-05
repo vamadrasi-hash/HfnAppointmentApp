@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
+  Bell,
   BellOff,
   CalendarClock,
   Check,
@@ -11,21 +12,17 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { getNotifications, markNotificationsRead } from '../lib/api'
-import { notificationsChanged } from '../lib/notifications'
+import { NOTIFICATION_DESTINATION as DESTINATION, notificationsChanged } from '../lib/notifications'
+import {
+  askForPushPermission,
+  backgroundPushConfigured,
+  pushPermission,
+  registerForBackgroundPush,
+  type PushPermission,
+} from '../lib/push'
 import type { AppNotification, NotificationKind } from '../lib/types'
 import { Button, Card, EmptyState, PageLoader } from '../components/ui'
 import { cx } from '../lib/utils'
-
-// Where tapping a notification takes you: a request is something the
-// preceptor has to answer; everything else is news about your own sitting.
-const DESTINATION: Record<NotificationKind, string> = {
-  request: '/sittings',
-  open_request: '/sittings',
-  confirmed: '/bookings',
-  declined: '/bookings',
-  alternate_proposed: '/bookings',
-  cancelled: '/bookings',
-}
 
 function icon(kind: NotificationKind) {
   switch (kind) {
@@ -55,6 +52,71 @@ function ago(iso: string): string {
   const days = Math.round(hours / 24)
   if (days < 7) return `${days} d ago`
   return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+}
+
+/**
+ * The one place that asks for permission to pop up. Browsers only allow
+ * the question from a tap, so it is a button rather than something that
+ * happens on load.
+ */
+function PopupPermissionCard({ profileId }: { profileId: string }) {
+  const [permission, setPermission] = useState<PushPermission>(() => pushPermission())
+  const [asking, setAsking] = useState(false)
+
+  if (permission === 'unsupported') return null
+
+  if (permission === 'granted') {
+    return (
+      <Card className="flex items-start gap-3 border-emerald-100 bg-emerald-50/50 py-3">
+        <Bell className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+        <p className="text-sm text-emerald-800">
+          Pop-up notifications are on
+          {backgroundPushConfigured
+            ? ' — you will hear about a request even when the app is closed.'
+            : ' while the app is open.'}
+        </p>
+      </Card>
+    )
+  }
+
+  if (permission === 'denied') {
+    return (
+      <Card className="flex items-start gap-3 border-amber-100 bg-amber-50/60 py-3">
+        <BellOff className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+        <p className="text-sm text-amber-800">
+          Pop-up notifications are blocked for this site. Turn them back on in your browser’s site
+          settings — the list below stays up to date either way.
+        </p>
+      </Card>
+    )
+  }
+
+  return (
+    <Card className="space-y-3">
+      <div className="flex items-start gap-3">
+        <Bell className="mt-0.5 h-4 w-4 shrink-0 text-brand-600" />
+        <div>
+          <p className="text-sm font-semibold text-ink-800">Turn on pop-up notifications</p>
+          <p className="mt-0.5 text-sm text-ink-500">
+            Be told the moment someone requests a sitting with you, or answers one of yours.
+          </p>
+        </div>
+      </div>
+      <Button
+        full
+        loading={asking}
+        onClick={async () => {
+          setAsking(true)
+          const next = await askForPushPermission()
+          setPermission(next)
+          if (next === 'granted') await registerForBackgroundPush(profileId)
+          setAsking(false)
+        }}
+      >
+        <Bell className="h-4 w-4" /> Allow notifications
+      </Button>
+    </Card>
+  )
 }
 
 export default function Notifications() {
@@ -122,6 +184,8 @@ export default function Notifications() {
           </Button>
         )}
       </div>
+
+      {user && <PopupPermissionCard profileId={user.id} />}
 
       {error && (
         <p className="rounded-xl border border-red-100 bg-red-50 px-3.5 py-2.5 text-sm text-red-600">

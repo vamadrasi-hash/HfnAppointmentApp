@@ -29,6 +29,13 @@ export default defineConfig({
       },
       workbox: {
         navigateFallbackDenylist: [/^\/auth/],
+        // The push + notification-click handlers (public/push-sw.js) are
+        // folded into the generated worker. It is a plain script rather
+        // than part of the app so the generated-worker strategy — which
+        // is what keeps the "a new version is ready" prompt simple — can
+        // stay as it is. Not precached: it is already part of the worker.
+        importScripts: ['push-sw.js'],
+        globIgnores: ['**/push-sw.js'],
       },
     }),
   ],

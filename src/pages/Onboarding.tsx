@@ -6,6 +6,7 @@ import { upsertProfile, saveHomePlace } from '../lib/api'
 import type { UserRole } from '../lib/types'
 import { Button, Card, Field, Input, Select } from '../components/ui'
 import { ZoneCenterPicker, type ZoneCenterValue } from '../components/ZoneCenterPicker'
+import { PHONE_HELP, isUsablePhone } from '../lib/utils'
 
 // First-run screen: collect the details we need before showing the app.
 export default function Onboarding() {
@@ -63,13 +64,19 @@ export default function Onboarding() {
       setError('Please enter your name.')
       return
     }
+    // A preceptor is shown this number when they answer a request, so it
+    // is asked for now rather than discovered missing later.
+    if (!isUsablePhone(phone)) {
+      setError(PHONE_HELP)
+      return
+    }
     setSaving(true)
     try {
       const saved = await upsertProfile({
         id: user.id,
         full_name: fullName.trim(),
         email: user.email ?? null,
-        phone: phone.trim() || null,
+        phone: phone.trim(),
         role,
         zone_id: place.zoneId || null,
         center_id: place.centerId || null,
@@ -113,13 +120,17 @@ export default function Onboarding() {
           />
         </Field>
 
-        <Field label="Phone number" hint="Shared with the preceptor for your sitting only.">
+        <Field
+          label="Mobile number"
+          hint="Required. Shared with the preceptor giving your sitting, so they can reach you about it — with nobody else."
+        >
           <Input
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
             placeholder="e.g. 98xxxxxxxx"
             inputMode="tel"
             autoComplete="tel"
+            required
           />
         </Field>
 

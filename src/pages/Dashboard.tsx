@@ -11,7 +11,7 @@ import {
   UserCheck,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { getMyBookings, upsertProfile } from '../lib/api'
+import { getMyBookings, updateProfile } from '../lib/api'
 import type { BookingDetail } from '../lib/types'
 import {
   isAdmin as isAdminRole,
@@ -77,7 +77,7 @@ export default function Dashboard() {
     setSavingOpen(true)
     setOpenError(null)
     try {
-      setProfile(await upsertProfile({ id: user.id, accepts_open_requests: next }))
+      setProfile(await updateProfile(user.id, { accepts_open_requests: next }))
     } catch (e: any) {
       setOpenError(e.message ?? 'Could not save that. Please try again.')
     } finally {

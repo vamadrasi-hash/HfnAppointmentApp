@@ -5,6 +5,7 @@
 -- =====================================================================
 
 -- ---- Clean slate (so you can re-run during setup) -------------------
+drop table if exists push_subscriptions cascade;
 drop table if exists notifications cascade;
 drop table if exists bookings cascade;
 drop table if exists session_types cascade;
@@ -117,6 +118,10 @@ create table profiles (
   id              uuid primary key references auth.users(id) on delete cascade,
   full_name       text not null,
   email           text,
+  -- Every account gives a mobile number when it registers: it is what a
+  -- preceptor is shown so they can reach the abhyasi about their sitting.
+  -- Enforced by trg_require_profile_phone rather than a not-null column,
+  -- so accounts made before the rule are left as they are.
   phone           text,
   role            user_role not null default 'abhyasi',
   -- A preceptor account waits for an administrator: 'pending' until one
@@ -631,6 +636,7 @@ set search_path = public, pg_temp
 as $$
 declare
   abhy_name   text;
+  abhy_phone  text;
   precep_name text;
   start_at    time;
   when_ts     timestamp;
@@ -639,7 +645,8 @@ declare
   is_open     boolean := (new.slot_id is null);
   party       int := 1 + coalesce(new.accompanying_count, 0);
 begin
-  select full_name into abhy_name   from profiles where id = new.abhyasi_id;
+  select full_name, phone into abhy_name, abhy_phone
+  from profiles where id = new.abhyasi_id;
   select full_name into precep_name from profiles where id = new.preceptor_id;
 
   if new.slot_id is not null then
@@ -664,7 +671,11 @@ begin
       new.id,
       case when is_open then 'open_request' else 'request' end,
       coalesce(abhy_name, 'Someone') || ' requested a sitting',
-      when_text || party_text || case when is_open then ' · outside your schedule' else '' end
+      -- Their mobile rides along, so answering is one tap from the alert.
+      when_text
+        || party_text
+        || case when is_open then ' · outside your schedule' else '' end
+        || case when abhy_phone is null then '' else ' · ' || abhy_phone end
     );
 
     -- Auto-confirm means the abhyasi never waits, so tell them at once.
@@ -740,6 +751,43 @@ create trigger trg_notify_on_booking
   after insert or update of status on bookings
   for each row execute function notify_on_booking();
 
+-- Sent out over realtime as well, so the app can raise a pop-up the
+-- moment one is written rather than at the next poll. Row level security
+-- still applies: a subscriber only ever receives their own rows.
+alter table notifications replica identity full;
+
+do $$
+begin
+  alter publication supabase_realtime add table notifications;
+exception
+  when duplicate_object then null;   -- already published
+  when undefined_object then null;   -- no realtime publication on this project
+end;
+$$;
+
+-- =====================================================================
+-- PUSH SUBSCRIPTIONS — one row per device that agreed to be told with
+-- the app closed.
+--
+-- Written by the app, read by the `send-push` edge function (see
+-- supabase/functions/send-push), which uses the service role and so is
+-- not bound by the policy below. The endpoint IS the device, so it is the
+-- key: signing in twice in the same browser must not leave two rows.
+-- Until that function is deployed this table simply stays empty and
+-- pop-ups happen while the app is open.
+-- =====================================================================
+create table push_subscriptions (
+  endpoint    text primary key,
+  profile_id  uuid not null references profiles(id) on delete cascade,
+  p256dh      text not null,
+  auth        text not null,
+  user_agent  text,
+  created_at  timestamptz default now(),
+  updated_at  timestamptz default now()
+);
+
+create index idx_push_subscriptions_profile on push_subscriptions (profile_id);
+
 -- =====================================================================
 -- ROW LEVEL SECURITY
 -- =====================================================================
@@ -751,6 +799,7 @@ alter table session_types       enable row level security;
 alter table profiles            enable row level security;
 alter table availability_slots  enable row level security;
 alter table home_places         enable row level security;
+alter table push_subscriptions  enable row level security;
 alter table bookings            enable row level security;
 alter table notifications       enable row level security;
 
@@ -830,6 +879,48 @@ $$;
 create trigger trg_guard_profile_role
   before insert or update on profiles
   for each row execute function guard_profile_role();
+
+-- ---- A mobile number is part of registering -------------------------
+-- A preceptor answering a request — especially one for a time they never
+-- published — settles it with a call, so the number has to be there.
+create or replace function require_profile_phone()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+declare
+  digits text := regexp_replace(coalesce(new.phone, ''), '\D', '', 'g');
+begin
+  new.phone := nullif(btrim(coalesce(new.phone, '')), '');
+
+  if tg_op = 'INSERT' then
+    if length(digits) < 10 then
+      raise exception 'A mobile number of at least 10 digits is needed to register.'
+        using errcode = 'check_violation';
+    end if;
+    return new;
+  end if;
+
+  -- An account that predates this rule is left alone unless someone
+  -- touches the number, and then it has to be a real one.
+  if new.phone is distinct from old.phone then
+    if old.phone is not null and new.phone is null then
+      raise exception 'Your mobile number cannot be removed — preceptors are shown it to reach you.'
+        using errcode = 'check_violation';
+    end if;
+    if new.phone is not null and length(digits) < 10 then
+      raise exception 'A mobile number needs at least 10 digits.'
+        using errcode = 'check_violation';
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_require_profile_phone
+  before insert or update on profiles
+  for each row execute function require_profile_phone();
 
 -- ---- Master data: everyone signed in can read; only admins edit -----
 create policy "master read zones"   on zones   for select to authenticated using (true);
@@ -957,6 +1048,13 @@ create policy "own notifications updatable" on notifications
 
 create policy "own notifications deletable" on notifications
   for delete to authenticated using (profile_id = auth.uid());
+
+-- ---- Push subscriptions ---------------------------------------------
+-- Your own devices, and nobody else's.
+create policy "own push subscriptions" on push_subscriptions
+  for all to authenticated
+  using (profile_id = auth.uid())
+  with check (profile_id = auth.uid());
 
 -- =====================================================================
 -- DONE. Next: run seed.sql to load sample master data, then sign up,

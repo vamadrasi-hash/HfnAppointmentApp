@@ -69,13 +69,25 @@ export function Card({
 }
 
 // ---------------- Label + field wrapper ----------------
+/**
+ * A caption above a control.
+ *
+ * Deliberately a `<div>` and not a `<label>`. A `<label>` forwards a click
+ * anywhere inside it to the first control it contains — and a browser
+ * decides that *after* React has re-rendered. So a listbox that closes
+ * itself when an option is tapped has, by then, taken that option out of
+ * the page; the browser no longer sees the tap as landing on a control of
+ * its own, forwards it to the field's own button, and the list springs
+ * straight back open. Fields hold whole widgets here, not just inputs, so
+ * the wrapper stays inert and each control keeps its own accessible name.
+ */
 export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
   return (
-    <label className="block">
+    <div className="block">
       <span className="mb-1.5 block text-sm font-medium text-ink-700">{label}</span>
       {children}
       {hint && <span className="mt-1 block text-xs text-ink-400">{hint}</span>}
-    </label>
+    </div>
   )
 }
 
