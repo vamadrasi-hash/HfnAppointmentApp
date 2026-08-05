@@ -1,5 +1,6 @@
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
 import { cx, initials } from '../lib/utils'
+import { HeartfulnessMark } from './Logo'
 
 // ---------------- Button ----------------
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
@@ -29,7 +30,7 @@ export function Button({
     <button
       className={cx(
         'inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold',
-        'transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:ring-offset-2',
+        'transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:ring-offset-2',
         full && 'w-full',
         buttonStyles[variant],
         className,
@@ -175,8 +176,11 @@ export function Spinner({ className }: { className?: string }) {
 // ---------------- Full-page loader ----------------
 export function PageLoader({ label = 'Loading…' }: { label?: string }) {
   return (
-    <div className="flex min-h-[60vh] flex-col items-center justify-center gap-3 text-ink-500">
-      <div className="h-12 w-12 animate-breathe rounded-full bg-brand-100" />
+    <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 text-ink-500">
+      <div className="relative flex h-16 w-16 items-center justify-center">
+        <span className="absolute inset-0 animate-breathe rounded-full bg-brand-100" />
+        <HeartfulnessMark className="relative h-10 w-10" />
+      </div>
       <span className="text-sm">{label}</span>
     </div>
   )
