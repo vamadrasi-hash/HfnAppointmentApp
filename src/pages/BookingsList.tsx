@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { CalendarX2, Search, Check, X, Clock } from 'lucide-react'
+import { CalendarX2, Search, Check, X, Clock, Users } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { getMyBookings, cancelBooking, acceptAlternate, rejectAlternate } from '../lib/api'
 import type { BookingDetail } from '../lib/types'
@@ -11,6 +11,8 @@ import {
   bookingTimes,
   formatTimeRange,
   formatTime,
+  partySize,
+  peopleLabel,
   prettyDate,
   isPastDate,
   statusLabel,
@@ -33,6 +35,12 @@ function BookingRow({
   const canCancel = b.status === 'requested' || b.status === 'confirmed' || b.status === 'reminded'
   const isAlternate = b.status === 'alternate_proposed'
   const reason = b.decline_reason || b.cancel_reason
+  // A preceptor's cancellation comes in both languages, exactly as they
+  // wrote it.
+  const reasonHi = b.decline_reason ? null : b.cancel_reason_hi
+  const party = partySize(b)
+  const asked = b.requested_accompanying_count == null ? null : b.requested_accompanying_count + 1
+  const trimmed = asked != null && asked > party
   // Still ahead of them, so it is worth saying where to go — or, for a
   // home sitting not yet confirmed, that the address is still to come.
   const showWhereToGo =
@@ -58,6 +66,24 @@ function BookingRow({
         {times && <span className="text-ink-600">{formatTimeRange(times.start, times.end)}</span>}
       </div>
 
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        {b.session_type && <Badge tone="brand">{b.session_type.name}</Badge>}
+        {party > 1 && (
+          <Badge tone={trimmed ? 'amber' : 'neutral'}>
+            <Users className="h-3 w-3" /> {peopleLabel(party)}
+          </Badge>
+        )}
+      </div>
+
+      {/* Fewer than were asked for: better said here than found out at the
+          door. */}
+      {trimmed && (
+        <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          {b.preceptor?.full_name ?? 'The preceptor'} approved {peopleLabel(party)} of the{' '}
+          {peopleLabel(asked!)} you asked for.
+        </p>
+      )}
+
       {/* A time the preceptor never published: there is no place on file,
           so they settle that when they answer. */}
       {isOpenRequest && showWhereToGo && (
@@ -70,7 +96,10 @@ function BookingRow({
       {b.note && <p className="mt-2 text-sm text-ink-500">“{b.note}”</p>}
 
       {reason && (
-        <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">Reason: {reason}</p>
+        <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
+          <p className="whitespace-pre-line">Reason: {reason}</p>
+          {reasonHi && <p className="mt-1 whitespace-pre-line">{reasonHi}</p>}
+        </div>
       )}
 
       {isAlternate && b.alternate_date && (

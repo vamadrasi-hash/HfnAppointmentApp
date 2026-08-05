@@ -7,6 +7,7 @@
 -- ---- Clean slate (so you can re-run during setup) -------------------
 drop table if exists notifications cascade;
 drop table if exists bookings cascade;
+drop table if exists session_types cascade;
 drop table if exists home_places cascade;
 drop table if exists availability_slots cascade;
 drop table if exists profiles cascade;
@@ -236,6 +237,35 @@ create trigger trg_normalize_slot_place
   for each row execute function normalize_slot_place();
 
 -- =====================================================================
+-- SESSION TYPES — what kind of sitting is being asked for.
+--
+-- Master data, like zones and centers: administrators maintain the list
+-- and a seeker picks one when they request a sitting. Two are seeded
+-- here; more can be added from the Master data screen.
+-- =====================================================================
+create table session_types (
+  id          uuid primary key default uuid_generate_v4(),
+  name        text not null,                   -- e.g. 'Introductory sitting'
+  -- The same name in Hindi, for the messages that go out in both.
+  name_hi     text,
+  description text,
+  sort_order  int not null default 0,
+  -- Uncheck rather than delete, so past bookings keep their type.
+  is_active   boolean not null default true,
+  created_at  timestamptz default now(),
+  updated_at  timestamptz default now()
+);
+
+-- Two types cannot share a name (case-insensitively).
+create unique index uniq_session_type_name on session_types (lower(name));
+
+insert into session_types (name, name_hi, description, sort_order) values
+  ('Regular individual sitting', 'नियमित व्यक्तिगत सिटिंग',
+   'The usual individual sitting for someone already practising.', 1),
+  ('Introductory sitting', 'परिचयात्मक सिटिंग',
+   'The first sittings for someone new to Heartfulness.', 2);
+
+-- =====================================================================
 -- BOOKINGS — an abhyasi reserves a place in a slot for one real date,
 -- or — where the preceptor allows it — asks for a time of their own.
 -- =====================================================================
@@ -249,6 +279,13 @@ create table bookings (
   booking_date       date not null,
   status             booking_status not null default 'requested',
   note               text,
+  -- What kind of sitting this is (see `session_types`).
+  session_type_id    uuid references session_types(id) on delete set null,
+  -- How many people come *with* the seeker. The seeker themselves is
+  -- always one more, so a booking takes 1 + this many places in the slot.
+  accompanying_count int not null default 0,
+  -- What was asked for, kept even when the preceptor approves fewer.
+  requested_accompanying_count int,
   -- Only for a booking with no slot: the time the abhyasi asked for.
   requested_start_time time,
   requested_end_time   time,
@@ -257,7 +294,10 @@ create table bookings (
   confirmed_at       timestamptz,
   decided_at         timestamptz,                 -- when the last status change happened
   decided_by         uuid references profiles(id) on delete set null,
+  -- A cancellation says why, in the preceptor's own words — the English
+  -- message and the same message in Hindi.
   cancel_reason      text,
+  cancel_reason_hi   text,
   decline_reason     text,
   -- a preceptor-proposed alternate time (abhyasi accepts -> becomes the sitting)
   alternate_date       date,
@@ -269,12 +309,16 @@ create table bookings (
   constraint chk_booking_target check (
     slot_id is not null
     or (preceptor_id is not null and requested_start_time is not null)
+  ),
+  constraint chk_accompanying_count check (
+    accompanying_count >= 0 and accompanying_count <= 50
   )
 );
 
 create index idx_bookings_slot_date on bookings(slot_id, booking_date);
 create index idx_bookings_abhyasi on bookings(abhyasi_id);
 create index idx_bookings_preceptor on bookings(preceptor_id);
+create index idx_bookings_session_type on bookings(session_type_id);
 
 -- One person cannot hold two LIVE places in the same slot on the same date.
 -- Dead states (cancelled/declined/expired/no_show) release the seat.
@@ -289,12 +333,49 @@ create unique index uniq_live_open_request
     and status not in ('cancelled', 'declined', 'expired', 'no_show');
 
 -- =====================================================================
+-- HOW FULL IS A SLOT — people, not bookings.
+--
+-- One booking can bring a family, so everything that asks "is there room"
+-- adds up 1 + accompanying_count. Keeping that in one function stops the
+-- capacity guard and the search RPCs from drifting apart.
+--
+-- SECURITY DEFINER matters here: as the calling user the count would be
+-- filtered by the "bookings readable to involved" policy, so the second
+-- person to book would count zero existing bookings and overfill the slot.
+-- =====================================================================
+create or replace function slot_seats_taken(
+  p_slot    uuid,
+  p_date    date,
+  p_exclude uuid default null
+)
+returns int
+language sql
+security definer
+stable
+set search_path = public, pg_temp
+as $$
+  select coalesce(sum(1 + coalesce(b.accompanying_count, 0)), 0)::int
+  from bookings b
+  where b.slot_id = p_slot
+    and b.booking_date = p_date
+    and b.status not in ('cancelled', 'declined', 'expired', 'no_show')
+    and (p_exclude is null or b.id <> p_exclude);
+$$;
+
+-- Nothing private here: the same number is in every search result already,
+-- as "N of M left".
+grant  execute on function public.slot_seats_taken(uuid, date, uuid) to authenticated;
+revoke execute on function public.slot_seats_taken(uuid, date, uuid) from public, anon;
+
+-- =====================================================================
 -- CAPACITY GUARD — refuse a booking that would overfill a slot.
 -- This runs inside the database, so even simultaneous requests are safe.
+--
+-- A slot with a place still free accepts the request however large the
+-- party: whether five may come to a sitting for four is the preceptor's
+-- decision, not the database's — they are asked, and answer. A slot with
+-- no free place at all is full.
 -- =====================================================================
--- SECURITY DEFINER matters here: as the calling user, the count below would
--- be filtered by the "bookings readable to involved" policy, so the second
--- person to book would count zero existing bookings and overfill the slot.
 create or replace function check_slot_capacity()
 returns trigger
 language plpgsql
@@ -303,7 +384,7 @@ set search_path = public, pg_temp
 as $$
 declare
   slot_capacity int;
-  live_count int;
+  taken int;
 begin
   if new.slot_id is null then
     return new;  -- nothing published, nothing to fill up
@@ -316,14 +397,9 @@ begin
   select capacity into slot_capacity
   from availability_slots where id = new.slot_id;
 
-  select count(*) into live_count
-  from bookings
-  where slot_id = new.slot_id
-    and booking_date = new.booking_date
-    and status not in ('cancelled', 'declined', 'expired', 'no_show')
-    and id <> new.id;
+  taken := slot_seats_taken(new.slot_id, new.booking_date, new.id);
 
-  if live_count >= slot_capacity then
+  if taken >= slot_capacity then
     raise exception 'This slot is already full for the selected date.';
   end if;
 
@@ -337,15 +413,23 @@ create trigger trg_check_capacity
 
 -- =====================================================================
 -- BOOKING DEFAULTS — on insert, stamp the preceptor, vet a request made
--- outside the schedule, and honour a preceptor's "auto_confirm" choice.
+-- outside the schedule, fill in the kind of sitting, and honour a
+-- preceptor's "auto_confirm" choice.
 -- =====================================================================
 create or replace function set_booking_defaults()
-returns trigger as $$
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
 declare
   slot_preceptor uuid;
   precep_auto    boolean;
   precep_open    boolean;
   precep_status  preceptor_status;
+  slot_capacity  int;
+  seats_free     int;
+  party          int;
 begin
   if new.slot_id is not null then
     select preceptor_id into slot_preceptor from availability_slots where id = new.slot_id;
@@ -377,6 +461,19 @@ begin
 
   if new.requested_at is null then new.requested_at := now(); end if;
 
+  -- What kind of sitting. The screen asks, but a booking made any other
+  -- way still ends up with one.
+  if new.session_type_id is null then
+    select id into new.session_type_id
+    from session_types
+    where is_active
+    order by sort_order, name
+    limit 1;
+  end if;
+
+  -- What was asked for is what arrived; only the preceptor changes it later.
+  new.requested_accompanying_count := coalesce(new.accompanying_count, 0);
+
   -- Search already hides an unapproved preceptor, and they cannot publish
   -- a slot; this catches a slot published before an approval was withdrawn,
   -- and any request asked of them directly.
@@ -386,22 +483,55 @@ begin
   end if;
 
   -- Auto-confirm is a promise about times the preceptor published, so it
-  -- applies to slot bookings only.
+  -- applies to slot bookings only — and never to a party larger than the
+  -- places left, which is a question only the preceptor can answer.
   if new.status = 'requested' and new.slot_id is not null then
     select auto_confirm into precep_auto from profiles where id = new.preceptor_id;
     if coalesce(precep_auto, false) then
-      new.status := 'confirmed';
-      new.confirmed_at := now();
+      select capacity into slot_capacity from availability_slots where id = new.slot_id;
+      seats_free := slot_capacity - slot_seats_taken(new.slot_id, new.booking_date, new.id);
+      party := 1 + coalesce(new.accompanying_count, 0);
+      if party <= seats_free then
+        new.status := 'confirmed';
+        new.confirmed_at := now();
+      end if;
     end if;
   end if;
   return new;
 end;
-$$ language plpgsql;
+$$;
 
 -- Name sorts before trg_check_capacity, so defaults are applied first.
 create trigger trg_booking_defaults
   before insert on bookings
   for each row execute function set_booking_defaults();
+
+-- =====================================================================
+-- WHO MAY CHANGE HOW MANY PEOPLE ARE COMING
+-- The preceptor answers "may five come to a sitting for four", so only
+-- they (or an admin, or a scheduled job) may move that number afterwards.
+-- What the seeker originally asked for never changes at all.
+-- =====================================================================
+create or replace function guard_booking_party_size()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.accompanying_count is distinct from old.accompanying_count
+     and not (auth.uid() is null or auth.uid() = old.preceptor_id or is_admin()) then
+    raise exception 'Only the preceptor can change how many people are coming.';
+  end if;
+
+  new.requested_accompanying_count := old.requested_accompanying_count;
+  return new;
+end;
+$$;
+
+create trigger trg_booking_party_size
+  before update on bookings
+  for each row execute function guard_booking_party_size();
 
 -- =====================================================================
 -- STATE MACHINE GUARD — enforce who may make which status transition,
@@ -505,7 +635,9 @@ declare
   start_at    time;
   when_ts     timestamp;
   when_text   text;
+  party_text  text := '';
   is_open     boolean := (new.slot_id is null);
+  party       int := 1 + coalesce(new.accompanying_count, 0);
 begin
   select full_name into abhy_name   from profiles where id = new.abhyasi_id;
   select full_name into precep_name from profiles where id = new.preceptor_id;
@@ -520,6 +652,11 @@ begin
   when_text := to_char(when_ts, 'Dy DD Mon')
                || case when start_at is null then '' else to_char(when_ts, ', HH12:MI AM') end;
 
+  -- Someone coming alone is the ordinary case and needs no remark.
+  if party > 1 then
+    party_text := ' · ' || party || ' people';
+  end if;
+
   if tg_op = 'INSERT' then
     insert into notifications (profile_id, booking_id, kind, title, body)
     values (
@@ -527,7 +664,7 @@ begin
       new.id,
       case when is_open then 'open_request' else 'request' end,
       coalesce(abhy_name, 'Someone') || ' requested a sitting',
-      when_text || case when is_open then ' · outside your schedule' else '' end
+      when_text || party_text || case when is_open then ' · outside your schedule' else '' end
     );
 
     -- Auto-confirm means the abhyasi never waits, so tell them at once.
@@ -535,7 +672,7 @@ begin
       insert into notifications (profile_id, booking_id, kind, title, body)
       values (new.abhyasi_id, new.id, 'confirmed',
               'Your sitting is confirmed',
-              when_text || ' · with ' || coalesce(precep_name, 'your preceptor'));
+              when_text || party_text || ' · with ' || coalesce(precep_name, 'your preceptor'));
     end if;
 
     return new;
@@ -550,7 +687,15 @@ begin
     insert into notifications (profile_id, booking_id, kind, title, body)
     values (new.abhyasi_id, new.id, 'confirmed',
             'Your sitting is confirmed',
-            when_text || ' · with ' || coalesce(precep_name, 'your preceptor'));
+            when_text || party_text || ' · with ' || coalesce(precep_name, 'your preceptor')
+            -- Fewer than were asked for: say so here rather than let them
+            -- find out at the door.
+            || case
+                 when new.requested_accompanying_count is not null
+                  and new.requested_accompanying_count > coalesce(new.accompanying_count, 0)
+                 then ' · ' || party || ' of the '
+                      || (1 + new.requested_accompanying_count) || ' you asked for'
+                 else '' end);
 
   elsif new.status = 'declined' then
     insert into notifications (profile_id, booking_id, kind, title, body)
@@ -571,12 +716,19 @@ begin
       insert into notifications (profile_id, booking_id, kind, title, body)
       values (new.preceptor_id, new.id, 'cancelled',
               coalesce(abhy_name, 'An abhyasi') || ' cancelled a sitting',
-              when_text);
+              when_text
+              || case when new.cancel_reason is null then ''
+                      else E'\n' || new.cancel_reason end);
     else
       insert into notifications (profile_id, booking_id, kind, title, body)
       values (new.abhyasi_id, new.id, 'cancelled',
               'Your sitting was cancelled',
-              coalesce(new.cancel_reason, when_text));
+              'आपकी सिटिंग रद्द कर दी गई है' || E'\n' || when_text
+              -- Exactly what the preceptor wrote, in both languages.
+              || case when new.cancel_reason is null then ''
+                      else E'\n' || new.cancel_reason end
+              || case when new.cancel_reason_hi is null then ''
+                      else E'\n' || new.cancel_reason_hi end);
     end if;
   end if;
 
@@ -595,6 +747,7 @@ alter table zones               enable row level security;
 alter table centers             enable row level security;
 alter table heartspots          enable row level security;
 alter table areas               enable row level security;
+alter table session_types       enable row level security;
 alter table profiles            enable row level security;
 alter table availability_slots  enable row level security;
 alter table home_places         enable row level security;
@@ -683,11 +836,13 @@ create policy "master read zones"   on zones   for select to authenticated using
 create policy "master read centers" on centers for select to authenticated using (true);
 create policy "master read areas"   on areas   for select to authenticated using (true);
 create policy "master read heartspots" on heartspots for select to authenticated using (true);
+create policy "master read session types" on session_types for select to authenticated using (true);
 
 create policy "admin write zones"   on zones   for all to authenticated using (is_admin()) with check (is_admin());
 create policy "admin write centers" on centers for all to authenticated using (is_admin()) with check (is_admin());
 create policy "admin write areas"   on areas   for all to authenticated using (is_admin()) with check (is_admin());
 create policy "admin write heartspots" on heartspots for all to authenticated using (is_admin()) with check (is_admin());
+create policy "admin write session types" on session_types for all to authenticated using (is_admin()) with check (is_admin());
 
 -- ---- Profiles -------------------------------------------------------
 -- Signed-in users can see profiles (needed to show preceptor & abhyasi names).
@@ -876,8 +1031,9 @@ as $$
   left join centers c on c.id = s.center_id
   left join heartspots h on h.id = s.heartspot_id
   left join home_places hp on hp.profile_id = s.preceptor_id
+  -- Places taken, counting the people each booking brings, not the rows.
   left join (
-    select slot_id, count(*) as cnt
+    select slot_id, sum(1 + coalesce(accompanying_count, 0)) as cnt
     from bookings
     where booking_date = target_date
       and status not in ('cancelled', 'declined', 'expired', 'no_show')
@@ -965,8 +1121,9 @@ as $$
   left join centers c on c.id = s.center_id
   left join heartspots h on h.id = s.heartspot_id
   left join home_places hp on hp.profile_id = s.preceptor_id
+  -- Places taken, counting the people each booking brings, not the rows.
   left join lateral (
-    select count(*) as cnt
+    select coalesce(sum(1 + coalesce(bk.accompanying_count, 0)), 0) as cnt
     from bookings bk
     where bk.slot_id = s.id
       and bk.booking_date = span.on_date

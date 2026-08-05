@@ -1,26 +1,33 @@
-// Zones, centers and their heartspots change rarely, so the whole lot
-// (5 zones, ~140 centers) is fetched once per session and shared by every
-// screen that needs it. The admin master-data screen edits it, so it can
-// also be invalidated — every hook re-reads when that happens.
+// Zones, centers, their heartspots and the kinds of sitting change
+// rarely, so the whole lot (5 zones, ~140 centers) is fetched once per
+// session and shared by every screen that needs it. The admin master-data
+// screen edits it, so it can also be invalidated — every hook re-reads
+// when that happens.
 import { useCallback, useEffect, useState } from 'react'
-import { getZones, getCenters, getHeartspots } from './api'
-import type { Center, Heartspot, Zone } from './types'
+import { getZones, getCenters, getHeartspots, getSessionTypes } from './api'
+import type { Center, Heartspot, SessionType, Zone } from './types'
 
 export interface MasterData {
   zones: Zone[]
   centers: Center[]
   heartspots: Heartspot[]
+  sessionTypes: SessionType[]
 }
 
-const EMPTY: MasterData = { zones: [], centers: [], heartspots: [] }
+const EMPTY: MasterData = { zones: [], centers: [], heartspots: [], sessionTypes: [] }
 
 let cache: Promise<MasterData> | null = null
 const listeners = new Set<() => void>()
 
 export function loadMasterData(): Promise<MasterData> {
   if (!cache) {
-    cache = Promise.all([getZones(), getCenters(), getHeartspots()])
-      .then(([zones, centers, heartspots]) => ({ zones, centers, heartspots }))
+    cache = Promise.all([getZones(), getCenters(), getHeartspots(), getSessionTypes()])
+      .then(([zones, centers, heartspots, sessionTypes]) => ({
+        zones,
+        centers,
+        heartspots,
+        sessionTypes,
+      }))
       .catch((e) => {
         cache = null // let the next caller retry
         throw e
@@ -89,6 +96,20 @@ export function findHeartspot(
 ): Heartspot | null {
   if (!id) return null
   return heartspots.find((h) => h.id === id) ?? null
+}
+
+// ------------------------------------------------------------------
+// Session types
+// ------------------------------------------------------------------
+
+/** The kinds of sitting a seeker can pick from, in the admin's order. */
+export function activeSessionTypes(types: SessionType[]): SessionType[] {
+  return types.filter((t) => t.is_active)
+}
+
+/** What to preselect: the first active kind, or nothing if there is none. */
+export function defaultSessionTypeId(types: SessionType[]): string {
+  return activeSessionTypes(types)[0]?.id ?? ''
 }
 
 // ------------------------------------------------------------------
