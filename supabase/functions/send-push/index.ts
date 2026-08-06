@@ -76,11 +76,21 @@ Deno.serve(async (req) => {
   if (error) return json({ error: error.message }, 500)
   if (!subscriptions?.length) return json({ sent: 0, reason: 'no devices' })
 
+  // Everything waiting, not just this one — it is what goes on the app
+  // icon, and the device has no way of counting for itself while the app
+  // is closed. A failure here is not worth losing the pop-up over.
+  const { count: unread } = await supabase
+    .from('notifications')
+    .select('id', { count: 'exact', head: true })
+    .eq('profile_id', record.profile_id)
+    .is('read_at', null)
+
   const message = JSON.stringify({
     title: record.title,
     body: record.body ?? '',
     url: DESTINATION[record.kind] ?? '/notifications',
     tag: record.id,
+    unread: unread ?? 1,
   })
 
   let sent = 0

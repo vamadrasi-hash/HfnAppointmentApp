@@ -9,6 +9,7 @@ import {
 import type { Session, User } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 import { getProfile } from '../lib/api'
+import { setAppBadge } from '../lib/badge'
 import type { Profile } from '../lib/types'
 
 interface AuthValue {
@@ -101,6 +102,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(async () => {
     await supabase.auth.signOut()
     setProfileState(null)
+    // Somebody else's unread count has no business on the icon.
+    setAppBadge(0)
   }, [])
 
   const refreshProfile = useCallback(async () => {
