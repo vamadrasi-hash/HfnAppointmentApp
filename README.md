@@ -469,7 +469,17 @@ There are two halves to this, and only the first needs setting up at all:
 - **With the app open** — in a tab, in the background, or installed on a phone and running. This works as soon as the person allows it. Nothing to configure.
 - **With the app closed.** This is Web Push proper, and it needs a VAPID key pair and something to send with it. Everything is in the repository — `supabase/functions/send-push` and its README walk through making the keys, setting `VITE_VAPID_PUBLIC_KEY`, deploying the function and pointing a database webhook at it. Skip it and the first half still works.
 
-On an **iPhone**, Safari only allows notifications for an app added to the Home Screen (share menu → "Add to Home Screen"), on iOS 16.4 or newer. In an ordinary Safari tab the permission prompt never appears.
+On an **iPhone**, Safari only allows notifications for an app added to the Home Screen, on iOS 16.4 or newer. In an ordinary Safari tab the permission question never appears — so rather than showing a button that cannot work, the Notifications screen shows the three steps for adding the app to the Home Screen instead, and the button appears once it is opened from there.
+
+A request notification stays on the screen until the preceptor deals with it, rather than fading away after a few seconds. Everything else behaves like an ordinary notification.
+
+### A count on the app icon
+
+Once the app is on the Home Screen, the number of unread notifications also appears **on the app icon itself** — the same number as on the bell inside. A preceptor sees that a request is waiting without opening anything.
+
+It is kept current from both ends: the app sets it as notifications are read, and the service worker sets it when a push arrives with the app closed (`send-push` counts what is unread and sends the total along with each message). Signing out clears it.
+
+This needs the app installed and a browser that draws one — Chrome on Android and desktop, Safari on iOS 16.4+. Where it is missing, nothing breaks; there is simply no number on the icon.
 
 ### Everyone gives a mobile number
 
@@ -532,6 +542,12 @@ Each level can carry an address, a map location and a Google Maps link. The most
 ## Installing the app on a phone (PWA)
 
 This app is a **Progressive Web App**, so it can be added to a phone's home screen and opened like a normal app (no app store needed). This works best once the app is live online (see the next section).
+
+**The app asks by itself.** Somebody who has not installed it sees a line on the dashboard offering to, and a card on the Notifications screen — both disappear for good once the app is installed or the offer is waved away. On Android the button opens Chrome's own install sheet directly; on an iPhone, where no browser offers such a thing, the card shows the steps for the Share menu instead.
+
+Installing is worth pressing on iPhone in particular: it is the only way notifications work there at all.
+
+Doing it by hand, if the offer has been dismissed:
 
 - **On Android (Chrome):** open the website, tap the **⋮** menu, then **Add to Home screen / Install app**.
 - **On iPhone (Safari):** open the website, tap the **Share** button, then **Add to Home Screen**.

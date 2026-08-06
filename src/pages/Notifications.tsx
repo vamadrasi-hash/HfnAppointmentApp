@@ -20,6 +20,9 @@ import {
   registerForBackgroundPush,
   type PushPermission,
 } from '../lib/push'
+import { needsInstallForNotifications } from '../lib/install'
+import { appBadgeSupported } from '../lib/badge'
+import { InstallCard } from '../components/InstallCard'
 import type { AppNotification, NotificationKind } from '../lib/types'
 import { Button, Card, EmptyState, PageLoader } from '../components/ui'
 import { cx } from '../lib/utils'
@@ -63,7 +66,17 @@ function PopupPermissionCard({ profileId }: { profileId: string }) {
   const [permission, setPermission] = useState<PushPermission>(() => pushPermission())
   const [asking, setAsking] = useState(false)
 
-  if (permission === 'unsupported') return null
+  // On an iPhone, Safari withholds notifications altogether until the
+  // app is on the Home Screen — there is no permission to ask for, so
+  // the only useful thing to show is how to put it there.
+  if (permission === 'unsupported') {
+    if (needsInstallForNotifications()) {
+      return (
+        <InstallCard reason="On an iPhone, notifications only work once Sittings is on your Home Screen. Add it, open it from there, and the button to turn them on will appear here." />
+      )
+    }
+    return null
+  }
 
   if (permission === 'granted') {
     return (
@@ -74,6 +87,7 @@ function PopupPermissionCard({ profileId }: { profileId: string }) {
           {backgroundPushConfigured
             ? ' — you will hear about a request even when the app is closed.'
             : ' while the app is open.'}
+          {appBadgeSupported() && ' A count appears on the app icon until you have read them.'}
         </p>
       </Card>
     )
@@ -186,6 +200,11 @@ export default function Notifications() {
       </div>
 
       {user && <PopupPermissionCard profileId={user.id} />}
+
+      {/* Installed, the app keeps a count on its icon and — on an iPhone
+          — is the only place notifications work at all. The card above
+          already covers that case, so this one steps aside for it. */}
+      {!needsInstallForNotifications() && <InstallCard dismissible />}
 
       {error && (
         <p className="rounded-xl border border-red-100 bg-red-50 px-3.5 py-2.5 text-sm text-red-600">

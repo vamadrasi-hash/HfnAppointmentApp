@@ -15,6 +15,7 @@ import { countUnreadNotifications, getNotifications } from './api'
 import { supabase } from './supabase'
 import type { AppNotification, NotificationKind } from './types'
 import { showPopup } from './push'
+import { setAppBadge } from './badge'
 
 const REFRESH_MS = 60_000
 
@@ -58,6 +59,12 @@ async function pop(n: Pick<AppNotification, 'id' | 'kind' | 'title' | 'body'>): 
 
 export function useUnreadNotifications(profileId: string | undefined | null) {
   const [count, setCount] = useState(0)
+  // The number on the app icon follows the number on the bell. The
+  // service worker keeps it current while the app is closed; this is the
+  // half that corrects it once someone has read something.
+  useEffect(() => {
+    setAppBadge(count)
+  }, [count])
   // The count as we last saw it. Null until the first read, because a
   // badge that starts at three is not three pieces of news.
   const lastCount = useRef<number | null>(null)

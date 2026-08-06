@@ -21,6 +21,8 @@ import {
 } from '../lib/roles'
 import { Badge, Card, SectionTitle, Toggle } from '../components/ui'
 import { PlaceLine } from '../components/PlaceLine'
+import { InstallNudge } from '../components/InstallCard'
+import { NotificationNudge } from '../components/NotificationNudge'
 import { bookingTimes, formatTimeRange, prettyDate, isPastDate } from '../lib/utils'
 
 function greeting(): string {
@@ -128,6 +130,14 @@ export default function Dashboard() {
           </p>
         </Card>
       )}
+
+      {/* Missing a request because the phone never said so is the one
+          failure that matters here, so both of these sit above the fold.
+          Each disappears for good once it has been dealt with. */}
+      <div className="space-y-3 empty:hidden">
+        <NotificationNudge />
+        <InstallNudge />
+      </div>
 
       {/* Next sitting */}
       {loaded && next && (

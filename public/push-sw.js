@@ -6,10 +6,27 @@
 // from the browser's push service, and a tap on the notification it
 // showed. The payload is what supabase/functions/send-push sends:
 //
-//   { "title": "...", "body": "...", "url": "/sittings", "tag": "<id>" }
+//   { "title": "...", "body": "...", "url": "/sittings", "tag": "<id>",
+//     "unread": 3 }
+//
+// `unread` is how many are waiting altogether, and goes on the app icon.
 //
 // Without a VAPID key configured nothing ever pushes here, and the app
 // still raises its own pop-ups while it is open.
+
+// The count on the Home Screen icon. Only an installed app has an icon
+// to draw on, and only some browsers draw it; where it is missing this
+// does nothing rather than failing.
+function updateAppBadge(unread) {
+  if (typeof unread !== 'number' || !self.navigator) return Promise.resolve()
+  try {
+    const done =
+      unread > 0 ? self.navigator.setAppBadge?.(unread) : self.navigator.clearAppBadge?.()
+    return Promise.resolve(done).catch(() => {})
+  } catch (e) {
+    return Promise.resolve()
+  }
+}
 
 self.addEventListener('push', (event) => {
   let payload = {}
@@ -21,13 +38,19 @@ self.addEventListener('push', (event) => {
 
   const title = payload.title || 'Heartfulness Sittings'
   event.waitUntil(
-    self.registration.showNotification(title, {
-      body: payload.body || '',
-      icon: '/pwa-192x192.png',
-      badge: '/favicon-64.png',
-      tag: payload.tag || 'hfn-sitting',
-      data: { url: payload.url || '/notifications' },
-    }),
+    Promise.all([
+      self.registration.showNotification(title, {
+        body: payload.body || '',
+        icon: '/pwa-192x192.png',
+        badge: '/favicon-64.png',
+        tag: payload.tag || 'hfn-sitting',
+        data: { url: payload.url || '/notifications' },
+        // A request needs answering, so it stays on screen until it is
+        // dealt with rather than fading away unseen.
+        requireInteraction: payload.url === '/sittings',
+      }),
+      updateAppBadge(payload.unread),
+    ]),
   )
 })
 
