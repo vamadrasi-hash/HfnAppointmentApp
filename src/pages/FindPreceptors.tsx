@@ -305,14 +305,16 @@ export default function FindPreceptors() {
     }
   }
 
-  // The soonest free time anywhere, shown when the seeker has not landed
-  // on a day that has one.
-  const next = result.next && result.next.date !== date ? result.next : null
-
   // Preceptors open to being asked show up whatever the day, so "is there
   // anything on this day" has to count published times, not names.
   const withTimes = result.onDate.filter((p) => p.slots.length > 0)
   const askableCount = result.onDate.length - withTimes.length
+
+  // The soonest free time after this day — and only when this day has
+  // none of its own. Alongside a list of today's times it reads as one
+  // more of them, at a date nobody asked for, and its Request button
+  // books that other day.
+  const next = withTimes.length === 0 ? result.next : null
 
   // "Nobody here" is either no one at all — published or askable — or,
   // with near me on, nobody we could actually place on a map.
@@ -448,8 +450,9 @@ export default function FindPreceptors() {
         </div>
       )}
 
-      {/* The soonest free time anywhere — so a seeker who has picked no
-          slot is still told when the next one is, and whose. */}
+      {/* The soonest free time after an empty day — so a seeker who has
+          landed on one is still told when the next is, and whose. The
+          date is on it deliberately: Request books that day, not this. */}
       {!loading && next && (
         <Card className="border-brand-200 bg-brand-50/40">
           <div className="flex items-start justify-between gap-3">
