@@ -190,6 +190,15 @@ const FUNCTIONS = [
     args: {},
     migration: '009_open_requests_and_notifications.sql',
   },
+  // Not called by the app. It stands in for the guard that refuses a
+  // booking in the past, which is a trigger and so cannot be asked for
+  // over the API — the two arrive in the same migration, so its absence
+  // says the guard is absent too.
+  {
+    name: 'app_timezone',
+    args: {},
+    migration: '012_no_bookings_in_the_past.sql',
+  },
 ]
 
 // ---------------------------------------------------------------------
