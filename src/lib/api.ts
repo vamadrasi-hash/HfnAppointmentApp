@@ -17,7 +17,7 @@ import type {
   SessionType,
   SittingPlaceType,
 } from './types'
-import { distanceKm } from './utils'
+import { distanceKm, toISODate } from './utils'
 import { HOME_PLACE_NAME, MY_HOME_PLACE_NAME, resolvePlace } from './place'
 import { NO_CITY_GROUP, centerFullLabel, centerGroup } from './centers'
 
@@ -501,10 +501,28 @@ export async function searchAvailability(filters: SlotFilters): Promise<Availabi
     return true
   }
 
+  // A time that has already begun cannot be asked for, so this morning's
+  // slots have no business on today's list at three in the afternoon.
+  //
+  // Measured against this device's clock rather than the database's. The
+  // slot carries a bare time of day with no zone attached, and nothing in
+  // the schema says which zone a center keeps, so the server has nothing
+  // to compare against; the seeker's own clock is the one that agrees
+  // with the day strip they picked from, which is built the same way.
+  //
+  // The boundary is the start: once a sitting has begun there is nothing
+  // left to confirm.
+  const now = new Date()
+  const today = toISODate(now)
+  const nowTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+  const stillToCome = (r: RawSlotRow) =>
+    r.slot_date > today || (r.slot_date === today && r.start_time.slice(0, 5) > nowTime)
+
   const usable = rows.filter(
     (r) =>
       inPlace(r) &&
       inTimeBand(r) &&
+      stillToCome(r) &&
       (filters.includeFull || r.capacity - Number(r.booked_count) > 0),
   )
 
