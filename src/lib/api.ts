@@ -456,9 +456,9 @@ function toAvailableSlot(r: RawSlotRow): AvailableSlot {
  * Everything the "find a sitting" screen asks in one round trip:
  *
  *  - `onDate`  who is open on the day the seeker picked;
- *  - `next`    the soonest open time anywhere in the window, so a seeker
- *              who has picked no slot is still told when the next one is
- *              and whose it is;
+ *  - `next`    the soonest open time *after* that day, so a seeker who has
+ *              landed on an empty one is still told when the next is and
+ *              whose it is;
  *  - `areas`   every available preceptor grouped by area and center — the
  *              answer to "nobody is near me".
  */
@@ -541,9 +541,16 @@ export async function searchAvailability(filters: SlotFilters): Promise<Availabi
     const slot = toAvailableSlot(r)
     if (r.slot_date === filters.date) entry.slots.push(slot)
 
-    // The rows come back ordered by date then time, so the first one seen
-    // is the soonest.
-    if (!entry.nextAvailable) entry.nextAvailable = slot
+    // "Next" means next from the day being looked at, not from today.
+    // The window always starts at today so that one search can answer
+    // everything the screen asks; without this test the soonest slot in
+    // it would sit behind the selected day on every day but the first,
+    // and "next available" would be pointing backwards.
+    //
+    // The rows come back ordered by date then time (see the `order by` on
+    // find_available_slots_range), so the first one past the selected day
+    // is the soonest one.
+    if (!entry.nextAvailable && r.slot_date > filters.date) entry.nextAvailable = slot
   }
 
   // Preceptors who publish nothing (or nothing left) but can still be
