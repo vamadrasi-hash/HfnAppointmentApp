@@ -74,7 +74,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signInWithGoogle = useCallback(async () => {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
-      options: { redirectTo: window.location.origin },
+      options: {
+        redirectTo: window.location.origin,
+        // Without this, Google signs straight back in as whoever is
+        // already signed in to the browser — so somebody who has just
+        // signed out, or who keeps a personal and a family account,
+        // cannot reach the other one. 'select_account' always shows the
+        // chooser; it does not ask for the password again, so for a
+        // person with one account it is a single extra tap.
+        queryParams: { prompt: 'select_account' },
+      },
     })
     if (error) throw error
   }, [])
