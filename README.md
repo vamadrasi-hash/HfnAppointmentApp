@@ -398,8 +398,17 @@ Run the files in **`supabase/migrations/`** in the SQL Editor, in number order, 
 | `009_open_requests_and_notifications.sql` | Lets a preceptor **accept requests outside their schedule**, adds the **notifications** inbox, and adds the look-ahead search behind "next available time" and the by-area list. |
 | `010_cancellation_message_and_session_types.sql` | Adds the **types of session** master list, lets a booking say **how many people are coming** (so places are counted by people, not bookings), and carries a preceptor's **cancellation message in both languages** through to the abhyasi's notification. |
 | `011_mobile_number_and_push.sql` | Makes a **mobile number part of registering** and puts it in the preceptor's notification, sends notifications out over **realtime** so the app can pop them up as they arrive, and adds the `push_subscriptions` table for pop-ups with the app closed. Accounts made before this keep working; they just cannot empty their number. |
+| `012_no_bookings_in_the_past.sql` | Refuses a request for **a time that has already begun**, in the database rather than only on the screen. Adds `app_timezone()`, which is where the app says which zone its published times are kept in. |
 
-A fresh `schema.sql` already includes 003–011 — the migrations are only for a database that already exists.
+A fresh `schema.sql` already includes 003–012 — the migrations are only for a database that already exists.
+
+#### Which timezone the times are in
+
+A published slot carries a bare time of day — `06:30` — with no zone attached, and nothing records which zone a center keeps, so the database has nothing to compare "now" against on its own. `app_timezone()` states the assumption in one place, and returns **`Asia/Kolkata`**.
+
+Change it there if the app is ever used elsewhere. If two zones ever have to coexist, it becomes a column on `centers` and that function goes away.
+
+The screens do the same sum from the other end: they hide a time that has passed using the seeker's own device clock, which is also what builds the strip of days they pick from.
 
 ### Being asked for a time outside the schedule
 

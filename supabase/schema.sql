@@ -512,6 +512,85 @@ create trigger trg_booking_defaults
   for each row execute function set_booking_defaults();
 
 -- =====================================================================
+-- A TIME THAT HAS ALREADY BEGUN CANNOT BE ASKED FOR
+-- The screens stop offering this morning's times once the morning has
+-- gone. `bookings` is written by a plain insert, though, so without this
+-- anyone calling the API with their own token could still ask for one.
+--
+-- A slot carries a bare time of day with no zone attached, and nothing
+-- here records which zone a center keeps, so `app_timezone()` states the
+-- assumption in one place: every published time is read as being in that
+-- zone. Replace it with a column on `centers` if two ever have to
+-- coexist.
+--
+-- Inserts only — confirming or cancelling a request whose time has since
+-- passed still has to work.
+-- =====================================================================
+create or replace function app_timezone()
+returns text
+language sql
+immutable
+set search_path = public, pg_temp
+as $$
+  select 'Asia/Kolkata'::text;
+$$;
+
+grant execute on function public.app_timezone() to authenticated;
+
+create or replace function guard_booking_not_past()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  starts_at time;
+  begins_at timestamptz;
+begin
+  -- An admin, or the service role with no signed-in user at all, may
+  -- record a sitting that has already happened.
+  if auth.uid() is null or is_admin() then
+    return new;
+  end if;
+
+  -- trg_booking_defaults has already run, so a slot booking has its slot
+  -- and an out-of-schedule request has the time it asked for.
+  if new.slot_id is not null then
+    select start_time into starts_at
+    from availability_slots
+    where id = new.slot_id;
+  else
+    starts_at := new.requested_start_time;
+  end if;
+
+  -- Nothing to compare against. Whatever is wrong with the row, another
+  -- guard has a better answer for it than this one.
+  if starts_at is null or new.booking_date is null then
+    return new;
+  end if;
+
+  -- The date and the time of day together are a wall-clock reading; the
+  -- zone is what turns it into a moment.
+  begins_at := (new.booking_date + starts_at) at time zone app_timezone();
+
+  if begins_at <= now() then
+    raise exception 'That time has already passed. Please pick a later one.';
+  end if;
+
+  return new;
+end;
+$$;
+
+-- Sorts after trg_booking_defaults, so the slot and the requested time
+-- are filled in, and before trg_check_capacity, so a time that has gone
+-- is refused before seats are counted for it.
+create trigger trg_booking_not_past
+  before insert on bookings
+  for each row execute function guard_booking_not_past();
+
+revoke execute on function public.guard_booking_not_past() from public, anon, authenticated;
+
+-- =====================================================================
 -- WHO MAY CHANGE HOW MANY PEOPLE ARE COMING
 -- The preceptor answers "may five come to a sitting for four", so only
 -- they (or an admin, or a scheduled job) may move that number afterwards.
